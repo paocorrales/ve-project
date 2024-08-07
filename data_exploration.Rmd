@@ -1,0 +1,126 @@
+---
+title: "Data exploration"
+output: html_document
+date: "2024-08-07"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+library(data.table)
+
+```
+
+
+[Multi-Satellite Volcanic Sulfur Dioxide L4 Long-Term Global Database V4 (MSVOLSO2L4)](https://disc.gsfc.nasa.gov/datasets/MSVOLSO2L4_4/summary)
+
+| Variable name | Description |
+|-----------|------------------|
+| volcano   | Name of volcano. |
+| lat       | Latitude of volcano. |
+| lon       | Longitude of volcano. |
+| v_alt     | Altitude of volcano (km). |
+| yyy       | Eruption year. |
+| mm        | Eruption month of year. |
+| dd        | Eruption day of month. |
+| type      | Eruption style: exp = explosive, eff = effusive. |
+| vei       | Eruption volcanic explosivity index (nd = no data or undetermined). |
+| p_alto_obs| Observed plume altitude (km) where known. |
+| p_alt_est | Estimated plume altitude (km) above vent: 10 km for explosive, 5 km for effusive. |
+| so2_kt    | Measured SO2 mass in kilotons (= 1000 metric tons) |
+
+```{r}
+so2 <- readr::read_lines(here::here("data/MSVOLSO2L4_v04-00-2024m0129.txt"), skip = 48)  |>
+  gsub(" +\\t", "\t", x = _) |>   # Líneas con espacios Y tab
+  gsub(" +", "\t", x = _) |>      # Líneas con espacios
+  gsub("\\t$", "", x = _) |>      # Tab extra al final
+  fread(text = _, na.strings = c("nd", "-999")) |> 
+  janitor::clean_names() |> 
+  _[, date := lubridate::make_date(yyyy, mm, dd)]
+```
+
+
+Time series is not homogeneous because: 
+
+* changes in sensors since Sep 2004: 
+  * better bandwidth (can separate better between O3 and SO2)
+  * smaller sensor footprint (more resolution)
+  * better algoritms? (validation with other satellite data)
+* No data from TOMS between 1994/12/28 and 1996/07/15
+
+
+```{r}
+so2 |> 
+  ggplot(aes(date, so2_kt)) +
+  geom_point(aes(color = factor(vei))) +
+  scale_color_viridis_d(option = "inferno", direction = -1) +
+  scale_y_log10(labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+  labs(x = "Date", y = "Measured SO2 mass in kilotons",
+       color = "Explosivity index") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+SO2 that reaches the stratosphere produces a cooling effect in the troposphere (sulfuric acid aerosols are good at scattering the SW radiation == increse in the total albedo, also changes microphysic properties in deep convective clouds - smaller droplets). SO2 transport in the stratosphere depends on:
+* location of the volcano (usually SO2 wont cross the Ecuator)
+* Phase of the QBO -> influence meridinal wind shear, then the horizontal transport
+* Altitude of the plume -> if it reach higher levels, it moves more quickly and more to the poles. 
+
+
+If SO2 does not reaches the stratosphere it could produce produce a warming effect in the troposphere (why? chemical reactions?), it shoud be short as the aerosols are removed by rain.
+
+
+weak erupotions have more *local* impacts? (dont know if we can see local effects, separate the effect of the eruptions from the regional variability)
+
+```{r}
+so2 |> 
+  ggplot(aes(factor(vei), p_alt_obs)) +
+  geom_point(position = "jitter", alpha = 0.5, color = "cyan4") +
+  facet_wrap(~type) +
+  labs(x = "Explocivity index", y = "Observed plume altitude (km)") +
+  theme_minimal()
+```
+
+```{r}
+map <- rnaturalearth::ne_coastline(scale = 10, returnclass = "sf")
+
+so2 |> 
+  ggplot(aes(lon, lat)) +
+  geom_point(aes(color = p_alt_obs  >= 12)) +
+  geom_sf(data = map, inherit.aes = FALSE, fill = NA) +
+  labs(x =  NULL, y = NULL) +
+  theme_minimal()
+  
+```
+
+```{r}
+library(patchwork)
+
+so2 |> 
+  _[, .(mean_so2 = sum(so2_kt)), by = .(yyyymm = lubridate::make_date(yyyy, mm))] |> 
+  ggplot(aes(yyyymm, mean_so2)) +
+  geom_line() +
+  geom_hline(yintercept = 5000, linetype = 3) +
+  labs(x = NULL, y = "SO2 (Kt)",
+       color = "Explosivity index") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+
+so2 |> 
+  _[, .(so2_total = sum(so2_kt),
+        p_alt_obs = max(p_alt_obs, na.rm = TRUE)), by = .(yyyy, volcano, lat)] |> 
+  ggplot(aes(yyyy, lat)) +
+  geom_point(aes(size = p_alt_obs, fill = so2_total), shape = 21, alpha = 0.7) +
+  scale_fill_viridis_c(option = "inferno", direction = -1,
+                       guide = guide_colorbar(barwidth = 10,
+                                              barheight = 0.5)) +
+  scale_size(range = c(0.1, 8)) +
+  labs(x = NULL, y = "Latitude", 
+       size = "Observed plume\naltitude (km)", fill = "Total SO2 (Kt)") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  
+  plot_layout(ncol = 1, heights = c(0.25, 0.75))
+```
+
