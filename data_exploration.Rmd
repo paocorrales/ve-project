@@ -46,7 +46,7 @@ Time series is not homogeneous because:
 * changes in sensors since Sep 2004: 
   * better bandwidth (can separate better between O3 and SO2)
   * smaller sensor footprint (more resolution)
-  * better algoritms? (validation with other satellite data)
+  * better algorithms? (validation with other satellite data)
 * No data from TOMS between 1994/12/28 and 1996/07/15
 
 
@@ -62,16 +62,16 @@ so2 |>
   theme(legend.position = "bottom")
 ```
 
-SO2 that reaches the stratosphere produces a cooling effect in the troposphere (sulfuric acid aerosols are good at scattering the SW radiation == increse in the total albedo, also changes microphysic properties in deep convective clouds - smaller droplets). SO2 transport in the stratosphere depends on:
+SO2 that reaches the stratosphere produces a cooling effect in the troposphere (sulfuric acid aerosols are good at scattering the SW radiation == increase in the total albedo, also changes microphysic properties in deep convective clouds - smaller droplets). SO2 transport in the stratosphere depends on:
 * location of the volcano (usually SO2 wont cross the Ecuator)
-* Phase of the QBO -> influence meridinal wind shear, then the horizontal transport
+* Phase of the QBO -> influence meriodional wind shear, then the horizontal transport
 * Altitude of the plume -> if it reach higher levels, it moves more quickly and more to the poles. 
 
 
-If SO2 does not reaches the stratosphere it could produce produce a warming effect in the troposphere (why? chemical reactions?), it shoud be short as the aerosols are removed by rain.
+If SO2 does not reaches the stratosphere it could produce produce a warming effect in the troposphere (why? chemical reactions?), it should be short as the aerosols are removed by rain.
 
 
-weak erupotions have more *local* impacts? (dont know if we can see local effects, separate the effect of the eruptions from the regional variability)
+weak eruptions have more *local* impacts? (don't know if we can see local effects, separate the effect of the eruptions from the regional variability)
 
 ```{r}
 so2 |> 
