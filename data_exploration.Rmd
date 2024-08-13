@@ -9,7 +9,8 @@ knitr::opts_chunk$set(echo = TRUE)
 
 library(ggplot2)
 library(data.table)
-
+library(metR)
+library(lubridate)
 ```
 
 
@@ -37,16 +38,16 @@ so2 <- readr::read_lines(here::here("data/MSVOLSO2L4_v04-00-2024m0129.txt"), ski
   gsub("\\t$", "", x = _) |>      # Tab extra al final
   fread(text = _, na.strings = c("nd", "-999")) |> 
   janitor::clean_names() |> 
-  _[, date := lubridate::make_date(yyyy, mm, dd)]
+  _[, date := lubridate::make_datetime(yyyy, mm, dd, tz = "UTC")]
 ```
 
 
 Time series is not homogeneous because: 
 
 * changes in sensors since Sep 2004: 
-  * better bandwidth (can separate better between O3 and SO2)
-  * smaller sensor footprint (more resolution)
-  * better algorithms? (validation with other satellite data)
+* better bandwidth (can separate better between O3 and SO2)
+* smaller sensor footprint (more resolution)
+* better algorithms? (validation with other satellite data)
 * No data from TOMS between 1994/12/28 and 1996/07/15
 
 
@@ -91,7 +92,7 @@ so2 |>
   geom_sf(data = map, inherit.aes = FALSE, fill = NA) +
   labs(x =  NULL, y = NULL) +
   theme_minimal()
-  
+
 ```
 
 ```{r}
@@ -106,8 +107,8 @@ so2 |>
        color = "Explosivity index") +
   theme_minimal() +
   theme(legend.position = "bottom") +
-
-so2 |> 
+  
+  so2 |> 
   _[, .(so2_total = sum(so2_kt),
         p_alt_obs = max(p_alt_obs, na.rm = TRUE)), by = .(yyyy, volcano, lat)] |> 
   ggplot(aes(yyyy, lat)) +
@@ -122,5 +123,189 @@ so2 |>
   theme(legend.position = "bottom") +
   
   plot_layout(ncol = 1, heights = c(0.25, 0.75))
+```
+
+
+## ERA5
+
+```{r}
+file_list  <- Sys.glob("/g/data/rt52/era5/single-levels/monthly-averaged/2t/*/*")
+
+#GlanceNetCDF(file_list[1])
+
+# t2_mean <- purrr::map(file_list, function(l) {
+
+#   t2 <- ReadNetCDF(l)
+# print(l)
+#   global_mean <- t2[, .(t2m = mean(t2m, na.rm = TRUE)), by = time]
+
+#   austrlia_mean  <- t2[longitude %between% c(110, 155) & latitude %between% c(-45, 11), 
+#   .(t2m = mean(t2m, na.rm = TRUE)), by = time]
+
+#   list(global_mean = global_mean, austrlia_mean = austrlia_mean)
+# })  |> 
+#   purrr::reduce(function(x, y) list(global_mean = rbind(x$global_mean, y$global_mean),
+#                              austrlia_mean = rbind(x$austrlia_mean, y$austrlia_mean)))
+
+
+# readr::write_rds(t2_mean, "data/t2_mean.rds")
+
+t2_mean <- readr::read_rds("data/t2_mean.rds")
+
+global_mean  <- t2_mean$global_mean |>
+  _[, t2m_a := t2m - mean(t2m), by = .(month(time))] |> 
+  _[, time := as_datetime(time, tz = "UTC")]
+
+
+```
+
+
+```{r}
+# group_eruptions <- function(time, threshold = 5) {
+#   dt <- c(Inf, diff(time))
+#   dt <- dplyr::if_else(dt > threshold, lubridate::as_date(time), NA)
+#   data.table::nafill(dt, type = "locf")
+# }
+
+# calculate_tbase <- function(temperature_serie, ini_dates, period = 12) {
+#   
+#   purrr::map_dbl(ini_dates, function(ini_date) {
+#     
+#     start_period <- ini_date - months(period)
+#     
+#     as.numeric(temperature_serie[time %between% c(start_period, ini_date), 
+#                                  .(base_t = mean(t2m_a))])
+#   }) 
+#   
+# }
+# 
+# get_series <- function(ini_date) {
+#   
+#   start_time <- ini_date - years(1)
+#   end_time <- ini_date + years(3)
+#   temp <- global_mean[time %between% c(start_time, end_time)] 
+#   
+#   list(time = temp$time,
+#        t2m_a = temp$t2m_a)
+#   
+# }
+```
+
+
+```{r}
+eruptions <- so2[, ini_date := group_eruptions(date, 60), by = volcano] |> 
+  _[, p_alt_obs := fifelse(is.na(p_alt_obs), p_alt_est ,p_alt_obs)] |> 
+  _[, .(p_alt_obs = max(p_alt_obs, na.rm = TRUE),
+        so2_kt = sum(so2_kt, na.rm = TRUE),
+        lat = unique(lat),
+        lon = unique(lon),
+        vei = max(vei, na.rm = TRUE)), by = .(volcano, ini_date)] |>
+  _[, let(base_t = calculate_tbase(global_mean, ini_date)),
+    by = .(volcano, ini_date)] |>
+  _[, let(id = paste0(volcano, "_", ini_date))] |> 
+  _[]
+
+temp_effect <-
+  eruptions[,  get_series(ini_date),
+            by = .(volcano, ini_date)] |>
+  eruptions[i = _, on = c("volcano", "ini_date")] |> 
+  _[, let(id = paste0(volcano, "_", ini_date),
+          lag =  as.numeric(difftime(time, ini_date))/2592000)]
+```
+
+
+```{r}
+eruptions |>
+  ggplot(aes(ini_date, volcano)) +
+  geom_point(aes(color = p_alt_obs > 20)) 
+```
+
+Neither so2 > 5000 or p_alt_obs > 20 km is good enough to clasify eruptions as "strong". Or at least not all eruptions that fall into this categories show a cooling effect on surface temperature anomaly (global). 
+
+So, can we use both? Or maybe look for the eruptios that shows this cooling effect. 
+```{r}
+temp_effect |>
+  _[so2_kt > 5000] |>
+  # _[, .N, by = id] |>
+  ggplot(aes(lag, t2m_a - base_t)) +
+  geom_vline(xintercept = 0, color = "darkorange") +
+  geom_hline(yintercept = 0, color = "grey") +
+  geom_line(aes(group = id), alpha = 1) +
+  geom_area(fill = "grey", alpha = 0.5) +
+  facet_wrap(~volcano, ncol = 1) +
+  labs(x = "Months since eruption",
+       y = "T 2m anomaly") +
+  theme_minimal()
+
+temp_effect |>
+  _[p_alt_obs > 20] |>
+  ggplot(aes(lag, t2m_a - base_t)) +
+  geom_vline(xintercept = 0, color = "darkorange") +
+    geom_hline(yintercept = 0,color = "grey") +
+  geom_line(aes(group = id)) +
+  geom_smooth(method = "lm", alpha = 0.5, linewidth = 0.5) +
+
+  facet_wrap(~volcano, ncol = 3) +
+  labs(x = "Months since eruption",
+       y = "T 2m anomaly") +
+  theme_minimal()
+
+```
+
+I can calculate the slop for the trend associated with each time series (for each eruption). 
+
+```{r}
+temp_slop <- temp_effect |>
+  _[, FitLm(t2m_a - base_t, lag), by = id] |>
+  _[term == "lag"] |>
+  _[eruptions, on = .NATURAL]
+
+strong <- temp_slop[estimate < -0.006, .(id, volcano, estimate, so2_kt, p_alt_obs, vei)]
+```
+
+There are `r temp_slop[estimate < 0, .N, ]` eruptions with a negative slop. Although many of them have a very small slop.
+
+```{r}
+temp_slop |>
+  ggplot(aes(estimate)) +
+  geom_histogram(binwidth = 0.001) +
+  geom_vline(xintercept = 0, color = "darkorange") +
+  geom_vline(xintercept = -0.006, color = "darkorange") +
+  annotate("text", y = 10, x = -0.012, label = "Strong\n eruptions?") +
+  labs(x = "Slop", y = NULL) +
+  theme_minimal()
+```
+
+
+
+```{r}
+temp_slop |>
+  ggplot(aes(estimate, so2_kt)) +
+  geom_vline(xintercept = 0, color = "darkorange") +
+  geom_point(aes(color = p_alt_obs)) +
+  # geom_smooth(method = "lm", alpha = 0.5) +
+  geom_label(data = strong, aes(label = volcano),
+             nudge_y = 0.2) +
+  scale_color_viridis_c(direction = -1) +
+  scale_y_log10() +
+  labs(x = "Slope", y = "SO2 emission", color = "Plume altitud") +
+  theme_minimal()
+```
+
+
+```{r}
+temp_effect[id %in% strong$id] |> 
+  _[] |> 
+  ggplot(aes(lag, t2m_a - base_t)) +
+  geom_vline(xintercept = 0, color = "darkorange") +
+    geom_hline(yintercept = 0,color = "grey") +
+  geom_line(aes(group = id)) +
+  geom_smooth(method = "lm", alpha = 0.5, linewidth = 0.5) +
+  geom_text(data = strong, x = -10, y = -0.5, hjust = 0, size = 3,
+            aes(label = paste0("SO2: ", so2_kt, "\nAlt: ", p_alt_obs, "\nVEI: ", vei))) +
+  facet_wrap(~id, ncol = 3) +
+  labs(x = "Months since eruption",
+       y = "T 2m anomaly") +
+  theme_minimal()
 ```
 
