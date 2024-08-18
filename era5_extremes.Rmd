@@ -1,0 +1,170 @@
+---
+title: "ERA5 - extremes"
+output: html_document
+date: "2024-08-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+library(data.table)
+library(metR)
+library(lubridate)
+library(unglue)
+```
+
+## Strong volcanos
+
+```{r}
+strong <- readr::read_rds("data/strong_volcanos.rds")
+
+map <- rnaturalearth::ne_coastline(scale = 50, returnclass = "sf")
+
+strong |> 
+  ggplot(aes(lon, lat)) +
+  geom_sf(data = map, inherit.aes = FALSE, fill = NA, color = "grey") +
+  geom_point(aes(fill = p_alt_obs, size = so2_kt), shape = 21) +
+  geom_label(aes(label = volcano), nudge_y = 12) +
+  scale_fill_viridis_c(guide = guide_colorbar(barwidth = 10,
+                                              barheight = 0.5)) +
+  labs(x =  NULL, y = NULL, fill = "Altitude", size = "SO2") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+files <- Sys.glob("data/2t_gt_p*")
+
+n_px <- purrr::map(files, function(f) {
+  
+  meta <- unglue(f, "data/2t_gt_{percentile}_npx.rds")  
+  
+  readr::read_rds(f) |>
+    setDT() |>
+    _[, let(time = floor_date(time, "day"),
+            percentile = meta[[1]][["percentile"]])]
+  
+  
+}) |> 
+  rbindlist() |> 
+  _[, n_px := fifelse(percentile %in% c("p1", "p5"), 1038240 - n_px, n_px)]
+
+```
+
+
+```{r}
+get_series_np <- function(ini_date, before = 1, after = 3, p = "p1") {
+  
+  start_time <- ini_date - years(before)
+  end_time <- ini_date + years(after)
+  temp <- n_px[time %between% c(start_time, end_time) & percentile == p]
+  
+  list(time = temp$time,
+       n_px = temp$n_px)
+  
+}
+
+calculate_base <- function(temperature_px, ini_date, period = 12, p = "p1") {
+  
+  
+  start_period <- lubridate::as_datetime(ini_date) - months(period)
+  
+  as.numeric(temperature_px[time %between% c(start_period, ini_date) & percentile == p,
+                            .(base_px = mean(n_px))])
+  
+}
+```
+
+
+```{r}
+t2_p1 <- strong |>
+  _[, let(base = calculate_base(n_px, ini_date, p = "p1")),
+    by = .(volcano, ini_date)] |>
+  _[,  get_series_np(ini_date, after = 2, p = "p1"),
+    by = .(volcano, ini_date)] |>
+  
+  strong[i = _, on = c("volcano", "ini_date")] |>
+  # _[]
+  _[, let(diff = n_px - base, 
+          id = paste0(volcano, "_", ini_date),
+          lag =  as.numeric(difftime(time, ini_date))/2592000)]
+
+
+t2_p1 |>
+  ggplot(aes(lag, diff)) +
+  geom_vline(xintercept = 0, color = "darkorange") +
+  geom_hline(yintercept = 0,color = "grey") +
+  geom_line(aes(group = id)) +
+  geom_point(data = t2_p1[, .SD[diff == max(diff)], by = .(id)], color = "red") +
+# geom_smooth(method = "lm", alpha = 0.5, linewidth = 0.5) +
+# geom_text(data = new_strong, x = 0, y = -0.4, hjust = 0, size = 3,
+#           aes(label = paste0("SO2: ", so2_kt, "\nAlt: ", p_alt_obs, "\nVEI: ", vei))) +
+facet_wrap(~id, ncol = 3) +
+  labs(x = "Months since eruption",
+       y = "# pixels with 2t below 1th percentile") +
+  theme_minimal()
+
+```
+
+```{r}
+t2_p99 <- strong |>
+  _[, let(base = calculate_base(n_px, ini_date, p = "p99")),
+    by = .(volcano, ini_date)] |>
+  _[,  get_series_np(ini_date, after = 2, p = "p99"),
+    by = .(volcano, ini_date)] |>
+  
+  strong[i = _, on = c("volcano", "ini_date")] |>
+  # _[]
+  _[, let(diff = n_px - base, 
+          id = paste0(volcano, "_", ini_date),
+          lag =  as.numeric(difftime(time, ini_date))/2592000)]
+
+
+t2_p99 |>
+  ggplot(aes(lag, diff)) +
+  geom_vline(xintercept = 0, color = "darkorange") +
+  geom_hline(yintercept = 0,color = "grey") +
+  geom_line(aes(group = id)) +
+  geom_point(data = t2_p99[, .SD[diff == max(diff)], by = .(id)], color = "red") +
+# geom_smooth(method = "lm", alpha = 0.5, linewidth = 0.5) +
+# geom_text(data = new_strong, x = 0, y = -0.4, hjust = 0, size = 3,
+#           aes(label = paste0("SO2: ", so2_kt, "\nAlt: ", p_alt_obs, "\nVEI: ", vei))) +
+facet_wrap(~id, ncol = 3) +
+  labs(x = "Months since eruption",
+       y = "# pixels with 2t over 99th percentile") +
+  theme_minimal()
+```
+
+```{r}
+t2_p1[, .SD[diff == max(diff)], by = .(id)] |> 
+  _[, time]
+
+ReadNetCDF("/scratch/w40/pc2687/gt_p95/2t/1p/daily_2t_gt_p1_199212.nc", vars = "t2m", 
+           subset = list(time = ymd("1992-12-21"))) |> 
+  _[, t2m := fifelse(t2m == 0, 1, 0)] |> 
+  _[t2m == 1] |> 
+  ggplot(aes(longitude, latitude)) +
+  geom_raster(fill = "cyan4") +
+  geom_sf(data = map, inherit.aes = FALSE, fill = NA, color = "grey", linewidth = 0.2) +
+  labs(title = "Points with T2 below 1th percentile",
+       subtitle = "1992-12-21") +
+  theme_minimal()
+```
+
+```{r}
+t2_p99[, .SD[diff == max(diff)], by = .(id)] |> 
+  _[, time]
+
+ReadNetCDF("/scratch/w40/pc2687/gt_p95/2t/99p/daily_2t_gt_p99_200911.nc", vars = "t2m", 
+           subset = list(time = ymd("2009-11-12"))) |> 
+  # _[, t2m := fifelse(t2m == 0, 1, 0)] |> 
+  _[t2m == 1] |> 
+  ggplot(aes(longitude, latitude)) +
+  geom_raster(fill = "cyan4") +
+  geom_sf(data = map, inherit.aes = FALSE, fill = NA, color = "grey", linewidth = 0.2) +
+  labs(title = "Points with T2 over 99th percentile",
+       subtitle = "2009-11-12") +
+  theme_minimal()
+```
+
