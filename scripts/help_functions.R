@@ -19,15 +19,16 @@ group_eruptions <- function(time, threshold = 5) {
 #
 # Returns: a vector of lengh ini_dates
 
-calculate_tbase <- function(temperature_serie, ini_dates, period = 12) {
+calculate_tbase <- function(temperature_serie, ini_date, period = 12) {
+
   
-  purrr::map_dbl(ini_dates, function(ini_date) {
+  # purrr::map_dbl(ini_dates, function(ini_date) {
     
     start_period <- lubridate::as_datetime(ini_date) - months(period)
     
     as.numeric(temperature_serie[time %between% c(start_period, ini_date), 
                                  .(base_t = mean(t2m_a))])
-  }) 
+  # }) 
   
 }
 
