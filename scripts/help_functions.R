@@ -41,15 +41,14 @@ calculate_tbase <- function(temperature_serie, ini_date, period = 12) {
 # 
 # Returns: a list with time and temperature anomaly, compatible with data.table
 
-get_series <- function(ini_date, before = 1, after = 3) {
+get_series <- function(t2_mean, ini_date, before = 1, after = 3) {
   
   start_time <- ini_date - years(before)
   end_time <- ini_date + years(after)
-  temp <- global_mean[time %between% c(start_time, end_time)] 
+  temp <- t2_mean[time %between% c(start_time, end_time)] 
   
   list(time = temp$time,
        t2m_a = temp$t2m_a)
   
 }
-
 
