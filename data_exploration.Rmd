@@ -168,8 +168,8 @@ eruptions <- so2[, ini_date := group_eruptions(date, 60), by = volcano] |>
         lat = unique(lat),
         lon = unique(lon),
         vei = max(vei, na.rm = TRUE)), by = .(volcano, ini_date)] |>
-  _[, let(base_t = calculate_tbase(global_mean, ini_date)),
-    by = .(volcano, ini_date)] |>
+  # _[, let(base_t = calculate_tbase(global_mean, ini_date)),
+  #   by = .(volcano, ini_date)] |>
   _[, let(id = paste0(volcano, "_", ini_date))] |> 
   _[]
 
@@ -302,7 +302,8 @@ eruptions |>
   theme_minimal()
 
 new_strong <- eruptions |> 
-  _[p_alt_obs > 15  & so2_kt > 900]
+  _[so2_kt > 900 & p_alt_obs > 15 & vei >= 5] |> 
+  _[]
 
 new_strong |> 
   readr::write_rds("data/strong_volcanos.rds")
