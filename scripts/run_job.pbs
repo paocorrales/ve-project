@@ -1,0 +1,18 @@
+#!/bin/bash
+ 
+#PBS -P w40
+#PBS -q normal
+#PBS -l ncpus=1
+#PBS -l mem=4GB
+#PBS -l walltime=01:30:00
+#PBS -l wd
+ 
+# Load module, always specify version number.
+module load R/4.3.1
+ 
+# Must include `#PBS -l storage=scratch/ab12+gdata/yz98` if the job
+# needs access to `/scratch/ab12/` and `/g/data/yz98/`. Details on:
+# https://opus.nci.org.au/display/Help/PBS+Directives+Explained
+ 
+# Run R application
+R --vanilla < ~/ve-project/scripts/global_daily_mean.R > output.$pid
