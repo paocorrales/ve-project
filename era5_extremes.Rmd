@@ -12,12 +12,33 @@ library(data.table)
 library(metR)
 library(lubridate)
 library(unglue)
+
+source("scripts/help_functions.R")
 ```
 
 ## Strong volcanos
 
 ```{r}
-strong <- readr::read_rds("data/strong_volcanos.rds")
+so2 <- readr::read_lines(here::here("data/MSVOLSO2L4_v04-00-2024m0129.txt"), skip = 48)  |>
+  gsub(" +\\t", "\t", x = _) |>   # Líneas con espacios Y tab
+  gsub(" +", "\t", x = _) |>      # Líneas con espacios
+  gsub("\\t$", "", x = _) |>      # Tab extra al final
+  fread(text = _, na.strings = c("nd", "-999")) |> 
+  janitor::clean_names() |> 
+  _[, date := lubridate::make_datetime(yyyy, mm, dd, tz = "UTC")]
+
+strong <- so2[, ini_date := group_eruptions(date, 60), by = volcano] |> 
+  _[, p_alt_obs := fifelse(is.na(p_alt_obs), p_alt_est ,p_alt_obs)] |> 
+  _[, .(p_alt_obs = max(p_alt_obs, na.rm = TRUE),
+        so2_kt = sum(so2_kt, na.rm = TRUE),
+        lat = unique(lat),
+        lon = unique(lon),
+        vei = max(vei, na.rm = TRUE)), by = .(volcano, ini_date)] |>
+  # _[, let(base_t = calculate_tbase(global_mean, ini_date)),
+  #   by = .(volcano, ini_date)] |>
+  _[, let(id = paste0(volcano, "_", ini_date))] |> 
+  _[(so2_kt > 900 & p_alt_obs > 15 & vei >= 5) | stringr::str_detect(volcano, "Hunga_Tonga") & p_alt_obs > 15] |> 
+  _[]
 
 map <- rnaturalearth::ne_coastline(scale = 50, returnclass = "sf")
 
@@ -32,6 +53,353 @@ strong |>
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
+## Temperature anomaly after volcanic eruptions
+
+Global temperature time series without global warming trend and annual cycle. 
+
+```{r}
+enso <- rsoi::download_oni(use_cache = TRUE) |> 
+  as.data.table() |> 
+  _[,.(time = as.POSIXct(Date), oni = dSST3.4)] 
+```
+
+
+```{r}
+t2_mean <- readr::read_rds("data/t2_mean_daily.rds") |> 
+  _[, time := floor_date(time, "day")] |> 
+  _[, t2m_notrend := pracma::detrend(t2m)] |> 
+  _[, t2m_a := t2m_notrend - mean(t2m_notrend), by = .(day(time), month(time))]
+# |>
+#   enso[i = _, on = "time"] |> 
+#   _[, oni := nafill(oni, "locf")] |> 
+#   _[, t2m_a := resid(lm(t2m_noannual ~ oni))]
+
+
+t2_mean |> 
+  ggplot(aes(time, t2m_noannual)) +
+  geom_line() +
+  geom_line(aes(y = t2m_a), color = "orange") +
+  labs(x = "Years", y = "2m temperature anomaly [C]") +
+  theme_minimal()
+```
+
+Now, define the eruption and no-eruption period to calculate a base temperature using the complete time series. An eruption period will include the 24 months after one of the selected eruptions. 
+
+```{r}
+t2_mean[, period := fcase(time %between% c(strong$ini_date[1], strong$ini_date[1] + months(24)), "eruption",
+                          time %between% c(strong$ini_date[2], strong$ini_date[2] + months(24)), "eruption",
+                          time %between% c(strong$ini_date[3], strong$ini_date[3] + months(24)), "eruption",
+                          time %between% c(strong$ini_date[4], strong$ini_date[4] + months(24)), "eruption",
+                          time %between% c(strong$ini_date[5], strong$ini_date[5] + months(24)), "eruption",
+                          default = "no eruption")]
+
+t2_mean |> 
+  _[, time := as_date(time, tz = "GMT")] |>
+  _[] |> 
+  ggplot(aes(time, t2m_a)) +
+  geom_line(aes(color = period)) +
+  geom_point(data = strong, aes(x = ini_date), y = 0) +
+  geom_hline(data = t2_mean[, mean(t2m_a), by = period], aes(yintercept = V1, color = period)) +
+  labs(x = "Years", y = "2m temperature anomaly [C]") +
+  theme_minimal()
+```
+
+
+```{r}
+t2_mean[, mean(t2m_a), by = period]
+
+t2_mean[time %between% as_date(c("1976-01-01", "1981-12-31")), mean(t2m_a)]
+
+t2m_noeruption_base <- strong[, get_series(t2_mean, ini_date), by = .(volcano, ini_date)] |> 
+  strong[i = _, on = c("volcano", "ini_date")] |> 
+  _[, let(id = paste0(volcano, "_", ini_date),
+          lag =  as.integer(difftime(time, ini_date)/86400),
+          diff = t2m_a - 0.04829714)] |> 
+  _[]
+
+t2m_noeruption_base |> 
+   _[, .(t_mean = mean(diff)), by = .(lag, id)] |> 
+  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+  _[lag %between% c(0, 365*1.5)] |> 
+  ggplot(aes(lag, t_mean)) +
+  geom_hline(yintercept = 0) +
+  geom_line(aes(color = id), alpha = 0.5) +
+  # geom_line(data = t2m_noeruption_base[lag %between% c(0, 365*1.5), .(t_mean = mean(diff)), by = lag], aes(y = t_mean)) +
+  geom_line(data = t2m_noeruption_base[lag %between% c(-15, 365*1.5+15), .(t_mean = mean(diff)), by = lag] |> 
+              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
+  # geom_smooth() +
+  # geom_smooth(aes(color = id))
+  guides(color = guide_legend(nrow = 2)) +
+  # facet_wrap(~id) +
+  scale_x_continuous(breaks = seq(0, 550, 60)) +
+  labs(x = "Days since eruption", y = "t2m anomaly - base",
+       color = NULL) +
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.box="vertical")
+```
+```{r}
+tropics_non_ve <- readr::read_rds("data/t2_mean_daily_regions.rds")$tropics |> 
+  _[, time := floor_date(time, "day")] |> 
+  _[, t2m_notrend := pracma::detrend(t2m)] |> 
+  _[, t2m_a := t2m_notrend - mean(t2m_notrend), by = .(day(time), month(time))]
+
+tropics_non_ve[, period := fcase(time %between% c(strong$ini_date[1], strong$ini_date[1] + months(24)), "eruption",
+                          time %between% c(strong$ini_date[2], strong$ini_date[2] + months(24)), "eruption",
+                          time %between% c(strong$ini_date[3], strong$ini_date[3] + months(24)), "eruption",
+                          time %between% c(strong$ini_date[4], strong$ini_date[4] + months(24)), "eruption",
+                          time %between% c(strong$ini_date[5], strong$ini_date[5] + months(24)), "eruption",
+                          default = "no eruption")]
+
+tropics_non_ve[, mean(t2m_a), by = period]
+
+tropics_noeruption_base <- strong[, get_series(tropics_non_ve, ini_date), by = .(volcano, ini_date)] |> 
+  strong[i = _, on = c("volcano", "ini_date")] |> 
+  _[, let(id = paste0(volcano, "_", ini_date),
+          lag =  as.integer(difftime(time, ini_date)/86400),
+          diff = t2m_a - -0.001320377	)] |> 
+  _[]
+
+tropics_noeruption_base |> 
+   _[, .(t_mean = mean(diff)), by = .(lag, id)] |> 
+  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+  _[lag %between% c(0, 365*1.5)] |> 
+  ggplot(aes(lag, t_mean)) +
+  geom_hline(yintercept = 0) +
+  geom_line(aes(color = id), alpha = 0.5) +
+  # geom_line(data = t2m_noeruption_base[lag %between% c(0, 365*1.5), .(t_mean = mean(diff)), by = lag], aes(y = t_mean)) +
+  geom_line(data = tropics_noeruption_base[lag %between% c(-15, 365*1.5+15), .(t_mean = mean(diff)), by = lag] |> 
+              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
+  # geom_smooth() +
+  # geom_smooth(aes(color = id))
+  guides(color = guide_legend(nrow = 2)) +
+  # facet_wrap(~id) +
+  scale_x_continuous(breaks = seq(0, 550, 60)) +
+  labs(x = "Days since eruption", y = "t2m anomaly - base",
+       color = NULL, title = "Tropics") +
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.box="vertical")
+```
+
+Using 12 months previous to the eruption as a base period. 
+
+```{r}
+
+t2m_2y <- strong[, let(base = calculate_tbase(t2_mean, ini_date, period = 12)),
+                 by = .(volcano, ini_date)] |>
+  _[, get_series(t2_mean, ini_date, before = 1, after = 2), by = .(volcano, ini_date)] |> 
+  strong[i = _, on = c("volcano", "ini_date")] |> 
+  _[, let(id = paste0(volcano, "_", ini_date),
+          lag =  as.numeric(difftime(time, ini_date)/86400),
+          diff = t2m_a - base)] |> 
+  _[]
+
+t2m_2y |> 
+  _[lag %between% c(0, 365*1.5)] |> 
+  ggplot(aes(lag, diff)) +
+  geom_hline(yintercept = 0) +
+  geom_line(aes(color = id), alpha = 0.5) +
+  # geom_line(data = t2m_2y[lag %between% c(0, 365*1.5), .(t_mean = mean(diff)), by = lag], aes(y = t_mean)) +
+  geom_line(data = t2m_2y[lag %between% c(-15, 365*1.5+15), .(t_mean = mean(diff)), by = lag] |> 
+              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
+  # geom_smooth() +
+  # geom_smooth(aes(color = id))
+  guides(color = guide_legend(nrow = 2)) +
+  facet_wrap(~id) +
+  scale_x_continuous(breaks = seq(0, 550, 60)) +
+  labs(x = "Days since eruption", y = "t2m anomaly - base",
+       color = NULL) +
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.box="vertical")
+
+t2m_2y |> 
+  _[, .(t_mean = mean(diff)), by = .(lag, id)] |> 
+  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+  _[lag %between% c(0, 365*1.5)] |> 
+  ggplot(aes(lag, t_mean)) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  annotate("rect", xmin = 120, xmax = 240, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_line(aes(color = id), alpha = 0.5) +
+  geom_line(data = t2m_2y[lag %between% c(-15, 365*1.5+15) & volcano != "Hunga_Tonga_Hungaapai", 
+                          .(t_mean = mean(diff)), by = lag] |> 
+              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
+  # geom_smooth() +
+  guides(color = guide_legend(nrow = 2)) +
+  # facet_wrap(~id) +
+  scale_x_continuous(breaks = seq(0, 550, 60)) +
+  labs(x = "Days since eruption", y = "t2m anomaly - base",
+       color = NULL) +
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.box="vertical")
+
+t2m_2y[lag %between% c(0, 365*1), .(t_mean = mean(diff)), by = lag] |> 
+  ggplot(aes(lag, t_mean)) +
+  geom_line() +
+  geom_line(data = t2m_noeruption_base[lag %between% c(0, 365*1), .(t_mean = mean(diff)), by = lag], color = "orange")
+```
+
+```{r}
+tropics <- readr::read_rds("data/t2_mean_daily_regions.rds")$tropics |> 
+  _[, time := floor_date(time, "day")] |> 
+  _[, t2m_notrend := pracma::detrend(t2m)] |> 
+  _[, t2m_a := t2m_notrend - mean(t2m_notrend), by = .(day(time), month(time))]
+
+
+tropics <- strong[, let(base = calculate_tbase(tropics, ini_date, period = 12)),
+                 by = .(volcano, ini_date)] |>
+  _[, get_series(tropics, ini_date, before = 1, after = 2), by = .(volcano, ini_date)] |> 
+  strong[i = _, on = c("volcano", "ini_date")] |> 
+  _[, let(id = paste0(volcano, "_", ini_date),
+          lag =  as.numeric(difftime(time, ini_date)/86400),
+          diff = t2m_a - base)] |> 
+  _[]
+
+tropics |> 
+   _[, .(t_mean = mean(diff)), by = .(lag, id)] |> 
+  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+  _[lag %between% c(0, 365*1.5)] |> 
+  ggplot(aes(lag, t_mean)) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  annotate("rect", xmin = 120, xmax = 240, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_line(aes(color = id), alpha = 0.5) +
+  geom_line(data = tropics[lag %between% c(-15, 365*1.5+15), 
+                          .(t_mean = mean(diff)), by = lag] |> 
+              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
+  # geom_smooth() +
+  guides(color = guide_legend(nrow = 2)) +
+  # facet_wrap(~id) +
+  scale_x_continuous(breaks = seq(0, 550, 60)) +
+  labs(x = "Days since eruption", y = "t2m anomaly - base",
+       color = NULL, title = "Extratropics SH") +
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.box="vertical")
+
+
+```
+
+
+
+### Impact in T2m fields
+
+Reads 30 days around day 180 after each eruption and calculate the mean. I'm using the daily temperature anomaly (no long term trend or seasonal cycle).
+
+```{r}
+times <- (strong$ini_date + days(121)) |> 
+  purrr::map(function(d) {
+    
+    # c(d - days(1), d + days(1))
+    times <- list(seq.Date(d - days(15), d + days(15), by = "day"))
+    
+  }) |> rbindlist()
+
+for (t in times$V1) {
+  
+  message(t)
+  if (t == times$V1[1]) {
+    
+    print(1)
+    temp <- ReadNetCDF("/scratch/w40/pc2687/2t_daily_deseasoned.nc", vars = "t2m", subset = list(time = as_date(t)))
+    
+    temp[, time := NULL]
+    
+  } else {
+    
+    field <- rbind(temp, 
+          ReadNetCDF("/scratch/w40/pc2687/2t_daily_deseasoned.nc", vars = "t2m", subset = list(time = as_date(t))) |> 
+            _[, time := NULL])  |> 
+      _[, .(t2m = sum(t2m)), by = .(longitude, latitude)]
+  }
+}
+
+field <- field[, t2m := t2m/nrow(times)]
+               
+readr::write_rds(field, "data/2t_7m.rds")
+field |> 
+  ggplot(aes(longitude, latitude)) +
+  # scattermore::geom_scattermore(aes(color = t2m)) +
+  geom_contour_fill(aes(z = t2m, fill = after_stat(level))) +
+  scale_fill_divergent_discretised(guide = guide_colorbar(barwidth = 20,
+                                               barheight = 0.5)) +
+  geom_sf(data = map, inherit.aes = FALSE, 
+          fill = NA, color = "grey", linewidth = 0.2) +
+  coord_sf(expand = FALSE) +
+  labs(x = NULL, y = NULL, fill = NULL,
+       subtitle = "Anomaly of t2m using 30 days centered in day 180 after eruption") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+```
+
+
+
+Reads the year previous to the eruption and calculate the mean base temperature for all eruptions.
+
+```{r}
+times_base <- purrr::map(strong$ini_date, function(d) {
+    
+    # c(d - days(1), d + days(1))
+    times <- list(seq.Date(d - days(365), d - days(1), by = "days"))
+    
+  }) |> rbindlist() |> 
+  _[, .(time = unique(V1))]
+
+for (t in times_base$time) {
+  
+  message(as_date(t))
+  if (t == times_base$time[1]) {
+    
+    print(1)
+    temp <- ReadNetCDF("/scratch/w40/pc2687/2t_daily_deseasoned.nc", vars = "t2m", subset = list(time = as_date(t))) |> 
+      _[, time := NULL]
+    
+  } else {
+    
+    field_base <- rbind(temp, 
+          ReadNetCDF("/scratch/w40/pc2687/2t_daily_deseasoned.nc", vars = "t2m", subset = list(time = as_date(t))) |> 
+            _[, time := NULL])  |> 
+      _[, .(t2m = sum(t2m)), by = .(longitude, latitude)]
+  }
+}
+
+field_base <- field_base[, t2m := t2m/nrow(times_base)]
+
+readr::write_rds(field_base, "data/2t_base_1y.rds")
+               
+field_base |> 
+  ggplot(aes(longitude, latitude)) +
+  # scattermore::geom_scattermore(aes(color = field$t2m - t2m)) +
+  geom_contour_fill(aes(z = field$t2m - t2m, fill = after_stat(level)),
+                    breaks = seq(-0.2, 0.2, 0.02)) +
+  scale_fill_divergent_discretised(guide = guide_colorbar(barwidth = 20,
+                                               barheight = 0.5)) +
+  geom_sf(data = map, inherit.aes = FALSE, 
+          fill = NA, color = "grey", linewidth = 0.2) +
+  coord_sf(expand = FALSE) +
+  labs(x = NULL, y = NULL, fill = NULL,
+       subtitle = "Anomaly of t2m using 30 days centered in day 180 after eruption") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+```{r}
+
+field_base[field, on = c("latitude", "longitude")] |> 
+  _[latitude %between% c(-30, 30), diff := i.t2m - t2m] |> 
+    ggplot(aes(longitude, latitude)) +
+  # scattermore::geom_scattermore(aes(color = field$t2m - t2m)) +
+  geom_contour_fill(aes(z = diff, fill = after_stat(level))) +
+  scale_fill_divergent_discretised(guide = guide_colorbar(barwidth = 20,
+                                               barheight = 0.5)) +
+  geom_sf(data = map, inherit.aes = FALSE, 
+          fill = NA, color = "grey", linewidth = 0.2) +
+  coord_sf(expand = FALSE, ylim = c(-30, 30)) +
+  labs(x = NULL, y = NULL, fill = NULL,
+       subtitle = "Anomaly of t2m using 30 days centered in day 210 after eruption") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+
+
+## Number of pixels over/below percentiles
 
 ```{r}
 files <- Sys.glob("data/2t_gt_p*")
@@ -97,10 +465,10 @@ t2_p1 |>
   geom_hline(yintercept = 0,color = "grey") +
   geom_line(aes(group = id)) +
   geom_point(data = t2_p1[, .SD[diff == max(diff)], by = .(id)], color = "red") +
-# geom_smooth(method = "lm", alpha = 0.5, linewidth = 0.5) +
-# geom_text(data = new_strong, x = 0, y = -0.4, hjust = 0, size = 3,
-#           aes(label = paste0("SO2: ", so2_kt, "\nAlt: ", p_alt_obs, "\nVEI: ", vei))) +
-facet_wrap(~id, ncol = 3) +
+  geom_smooth(alpha = 0.5, linewidth = 0.5) +
+  # geom_text(data = new_strong, x = 0, y = -0.4, hjust = 0, size = 3,
+  #           aes(label = paste0("SO2: ", so2_kt, "\nAlt: ", p_alt_obs, "\nVEI: ", vei))) +
+  facet_wrap(~id, ncol = 3) +
   labs(x = "Months since eruption",
        y = "# pixels with 2t below 1th percentile") +
   theme_minimal()
@@ -127,10 +495,10 @@ t2_p99 |>
   geom_hline(yintercept = 0,color = "grey") +
   geom_line(aes(group = id)) +
   geom_point(data = t2_p99[, .SD[diff == max(diff)], by = .(id)], color = "red") +
-# geom_smooth(method = "lm", alpha = 0.5, linewidth = 0.5) +
-# geom_text(data = new_strong, x = 0, y = -0.4, hjust = 0, size = 3,
-#           aes(label = paste0("SO2: ", so2_kt, "\nAlt: ", p_alt_obs, "\nVEI: ", vei))) +
-facet_wrap(~id, ncol = 3) +
+  # geom_smooth(method = "lm", alpha = 0.5, linewidth = 0.5) +
+  # geom_text(data = new_strong, x = 0, y = -0.4, hjust = 0, size = 3,
+  #           aes(label = paste0("SO2: ", so2_kt, "\nAlt: ", p_alt_obs, "\nVEI: ", vei))) +
+  facet_wrap(~id, ncol = 3) +
   labs(x = "Months since eruption",
        y = "# pixels with 2t over 99th percentile") +
   theme_minimal()
