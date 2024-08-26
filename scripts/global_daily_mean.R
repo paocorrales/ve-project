@@ -4,7 +4,7 @@ library(metR)
 library(lubridate)
 library(unglue)
 
-file_na <- Sys.glob("/scratch/w40/pc2687/2t_gt_p99_na.nc")
+file_na <- Sys.glob("/scratch/w40/pc2687/2t_gt_p95_na.nc")
 file_data <- "/scratch/w40/pc2687/2t_daily_deseasoned.nc"
 
 times <- seq.Date(as_date("1970-01-01"), as_date("2023-12-31"), "days")
@@ -13,10 +13,12 @@ t2_mean <- purrr::map(times, function(t) {
   
   message(t)
   
-  nas <- ReadNetCDF(file_na, vars = "t2m", subset = list(time = as_date(t)),
+  nas <- ReadNetCDF(file_na, vars = "t2m", subset = list(time = as_date(t),
+                                                         latitude = -60:60),
                     out = "vector")
   
-  t2 <- ReadNetCDF(file_data, vars = "t2m", subset = list(time = as_date(t))) |> 
+  t2 <- ReadNetCDF(file_data, vars = "t2m", subset = list(time = as_date(t),
+                                                          latitude = -60:60)) |> 
     _[, na := nas] |> 
     _[, t2m := t2m*na] |> 
     _[, .(t2m = mean(t2m, na.rm = TRUE)), by = time]
@@ -26,7 +28,7 @@ t2_mean <- purrr::map(times, function(t) {
 
 
 
-readr::write_rds(t2_mean, "~/ve-project/data/t2_mean_daily_p99.rds")
+readr::write_rds(t2_mean, "~/ve-project/data/t2_mean_daily_p95_region.rds")
 
 
 # ReadNetCDF(file_data, vars = "t2m", subset = list(time = as_date(t))) |> 
