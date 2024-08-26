@@ -396,8 +396,68 @@ field_base[field, on = c("latitude", "longitude")] |>
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
+### Percentiles
 
 
+```{r}
+t2_percentiles <- purrr::map(Sys.glob("data/t2_mean_daily_p*.rds"), function(f) {
+  
+  meta <- unglue(f, "data/t2_mean_daily_{percentile}.rds")
+  
+  readr::read_rds(f) |> 
+  _[, time := as_date(floor_date(time, "day"))] |> 
+  _[, percentile := meta[[1]][["percentile"]]] |> 
+    setnames("t2m", "t2m_a")
+  
+}) |> 
+  rbindlist()
+```
+
+```{r}
+t2_percentiles |> 
+  ggplot(aes(time, t2m_a)) +
+  geom_line(aes(color = percentile), alpha = 0.5)
+```
+
+
+```{r}
+p_1y <- purrr::map(c("p1", "p5", "p95", "p99"), function(percentile) {  
+ 
+   strong[, let(base = calculate_tbase(t2_percentiles, ini_date, period = 12, TRUE, percentile)),
+                 by = .(volcano, ini_date)] |>
+  _[, get_series(t2_percentiles, ini_date, before = 1, after = 2, TRUE, percentile), by = .(volcano, ini_date)] |> 
+  strong[i = _, on = c("volcano", "ini_date")] |> 
+  _[, let(id = paste0(volcano, "_", ini_date),
+          lag =  as.numeric(difftime(time, ini_date)/86400),
+          diff = t2m_a - base,
+          percentile = percentile)] 
+  
+}) |> 
+  rbindlist()
+
+
+
+p_1y |> 
+  _[, .(t_mean = mean(diff)), by = .(lag, id, percentile)] |> 
+  # _[lag %between% c(-365, 0), .(m = mean(t_mean))] |> 
+  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+  _[lag %between% c(0, 365*1.5)] |>
+  ggplot(aes(lag, t_mean)) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  annotate("rect", xmin = 120, xmax = 240, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_line(aes(color = id), alpha = 0.5) +
+  geom_line(data = p_1y[lag %between% c(0, 365*1.5), .(t_mean = mean(diff)), by = .(lag, percentile)] |> 
+              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
+  # geom_smooth() +
+  guides(color = guide_legend(nrow = 2)) +
+  facet_wrap(~percentile) +
+  scale_x_continuous(breaks = seq(0, 550, 60)) +
+  labs(x = "Days since eruption", y = "t2m anomaly - base",
+       color = NULL) +
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.box="vertical")
+
+```
 
 ## Number of pixels over/below percentiles
 
