@@ -1,0 +1,172 @@
+---
+title: "Presentation"
+output: html_document
+date: "2024-08-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+library(data.table)
+library(metR)
+library(lubridate)
+library(unglue)
+
+source("scripts/help_functions.R")
+```
+
+## Strong volcanos
+
+```{r}
+so2 <- readr::read_lines(here::here("data/MSVOLSO2L4_v04-00-2024m0129.txt"), skip = 48)  |>
+  gsub(" +\\t", "\t", x = _) |>   # Líneas con espacios Y tab
+  gsub(" +", "\t", x = _) |>      # Líneas con espacios
+  gsub("\\t$", "", x = _) |>      # Tab extra al final
+  fread(text = _, na.strings = c("nd", "-999")) |> 
+  janitor::clean_names() |> 
+  _[, date := lubridate::make_datetime(yyyy, mm, dd, tz = "UTC")]
+
+strong <- so2[, ini_date := group_eruptions(date, 60), by = volcano] |> 
+  _[, p_alt_obs := fifelse(is.na(p_alt_obs), p_alt_est ,p_alt_obs)] |> 
+  _[, .(p_alt_obs = max(p_alt_obs, na.rm = TRUE),
+        so2_kt = sum(so2_kt, na.rm = TRUE),
+        lat = unique(lat),
+        lon = unique(lon),
+        vei = max(vei, na.rm = TRUE)), by = .(volcano, ini_date)] |>
+  # _[, let(base_t = calculate_tbase(global_mean, ini_date)),
+  #   by = .(volcano, ini_date)] |>
+  _[, let(id = paste0(volcano, "_", ini_date))] |> 
+  _[(so2_kt > 900 & p_alt_obs > 15 & vei >= 5) | stringr::str_detect(volcano, "Hunga_Tonga") & p_alt_obs > 15] |> 
+  _[]
+
+map <- rnaturalearth::ne_coastline(scale = 50, returnclass = "sf")
+
+strong |> 
+  ggplot(aes(lon, lat)) +
+  geom_sf(data = map, inherit.aes = FALSE, fill = NA, color = "grey") +
+  geom_point(aes(fill = p_alt_obs, size = so2_kt), shape = 21) +
+  geom_label(aes(label = volcano), nudge_y = 12) +
+  scale_fill_viridis_c(guide = guide_colorbar(barwidth = 10,
+                                              barheight = 0.5)) +
+  labs(x =  NULL, y = NULL, fill = "Altitude", size = "SO2") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+## Effect on 2m temperature
+
+### Anomalies
+
+```{r}
+t2_mean <- readr::read_rds("data/t2_mean_daily.rds") |> 
+  _[, time := as_date(floor_date(time, "day"))] |> 
+  _[, t2m_notrend := pracma::detrend(t2m)] |> 
+  _[, t2m_a := t2m_notrend - mean(t2m_notrend), by = .(day(time), month(time))]
+
+tropics_t2_mean <- readr::read_rds("data/t2_mean_daily_regions.rds")$tropics |> 
+  _[, time := as_date(floor_date(time, "day"))] |> 
+  _[, t2m_notrend := pracma::detrend(t2m)] |> 
+  _[, t2m_a := t2m_notrend - mean(t2m_notrend), by = .(day(time), month(time))]
+```
+
+Base temperature defined as the average of the 12 months previous to the eruption
+
+```{r}
+t2m_1y <- strong[, let(base = calculate_tbase(t2_mean, ini_date, period = 12)),
+                 by = .(volcano, ini_date)] |>
+  _[, get_series(t2_mean, ini_date, before = 1, after = 2), by = .(volcano, ini_date)] |> 
+  strong[i = _, on = c("volcano", "ini_date")] |> 
+  _[, let(id = paste0(volcano, "_", ini_date),
+          lag =  as.numeric(difftime(time, ini_date)/86400),
+          diff = t2m_a - base)] |> 
+  _[]
+
+
+t2m_1y |> 
+  _[, .(t_mean = mean(diff)), by = .(lag, id)] |> 
+  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+  _[lag %between% c(0, 365*1.5)] |> 
+  ggplot(aes(lag, t_mean)) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  annotate("rect", xmin = 120, xmax = 240, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_line(aes(color = id), alpha = 0.5) +
+  geom_line(data = t2m_1y[lag %between% c(-15, 365*1.5+15), 
+                          .(t_mean = mean(diff)), by = lag] |> 
+              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
+  # geom_smooth() +
+  guides(color = guide_legend(nrow = 2)) +
+  # facet_wrap(~id) +
+  scale_x_continuous(breaks = seq(0, 550, 60)) +
+  labs(x = "Days since eruption", y = "t2m anomaly - base",
+       color = NULL) +
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.box="vertical")
+```
+
+```{r}
+tropics_1y <- strong[, let(base = calculate_tbase(tropics_t2_mean, ini_date, period = 12)),
+                 by = .(volcano, ini_date)] |>
+  _[, get_series(tropics_t2_mean, ini_date, before = 1, after = 2), by = .(volcano, ini_date)] |> 
+  strong[i = _, on = c("volcano", "ini_date")] |> 
+  _[, let(id = paste0(volcano, "_", ini_date),
+          lag =  as.numeric(difftime(time, ini_date)/86400),
+          diff = t2m_a - base)] |> 
+  _[]
+
+tropics_1y |> 
+   _[, .(t_mean = mean(diff)), by = .(lag, id)] |> 
+  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+  _[lag %between% c(0, 365*1.5)] |> 
+  ggplot(aes(lag, t_mean)) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  annotate("rect", xmin = 120, xmax = 240, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_line(aes(color = id), alpha = 0.5) +
+  geom_line(data = tropics_1y[lag %between% c(-15, 365*1.5+15), 
+                          .(t_mean = mean(diff)), by = lag] |> 
+              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
+  # geom_smooth() +
+  guides(color = guide_legend(nrow = 2)) +
+  # facet_wrap(~id) +
+  scale_x_continuous(breaks = seq(0, 550, 60)) +
+  labs(x = "Days since eruption", y = "t2m anomaly - base",
+       color = NULL, title = "Tropics") +
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.box="vertical")
+
+```
+
+```{r}
+field_base <- readr::read_rds("data/2t_base_1y.rds") |> 
+  setnames("t2m", "t_base")
+
+field_t2m <- purrr::map(Sys.glob("data/2t_*m.rds"), function(f) {
+  
+  meta <- unglue(f, "data/2t_{period}.rds")
+  
+  readr::read_rds(f) |> 
+    _[, period := meta[[1]][["period"]]] 
+  
+}) |> rbindlist() |> 
+  _[field_base, on = .NATURAL]
+ 
+
+field_t2m |> 
+  ggplot(aes(longitude, latitude)) +
+  geom_contour_fill(aes(z = t2m - t_base, fill = after_stat(level)),
+                    breaks = seq(-0.16, 0.16, 0.02)) +
+  scale_fill_divergent_discretised(labels = function(x) JumpBy(x, 2, fill = ""),
+                                   guide = guide_colorbar(barwidth = 25,
+                                               barheight = 0.5)) +
+  geom_sf(data = map, inherit.aes = FALSE, 
+          fill = NA, color = "grey", linewidth = 0.2) +
+  facet_wrap(~period, ncol = 1) +
+  coord_sf(expand = FALSE, ylim = c(-60, 60)) +
+  labs(x = NULL, y = NULL, fill = NULL,
+       subtitle = "Anomaly of t2m using 30 days centered in month n after eruption") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+
+### Extremes
