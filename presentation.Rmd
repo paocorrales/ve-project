@@ -46,10 +46,10 @@ strong |>
   ggplot(aes(lon, lat)) +
   geom_sf(data = map, inherit.aes = FALSE, fill = NA, color = "grey") +
   geom_point(aes(fill = p_alt_obs, size = so2_kt), shape = 21) +
-  geom_label(aes(label = volcano), nudge_y = 12) +
+  geom_label(aes(label = volcano), nudge_y = 12, nudge_x = 30) +
   scale_fill_viridis_c(guide = guide_colorbar(barwidth = 10,
                                               barheight = 0.5)) +
-  labs(x =  NULL, y = NULL, fill = "Altitude", size = "SO2") +
+  labs(x =  NULL, y = NULL, fill = "Plume\nAltitude (Km)", size = "SO2 (kt)") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
