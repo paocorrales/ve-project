@@ -14,6 +14,8 @@ library(lubridate)
 library(unglue)
 
 source("scripts/help_functions.R")
+
+map <- rnaturalearth::ne_coastline(scale = 50, returnclass = "sf")
 ```
 
 ## Strong volcanos
@@ -39,8 +41,6 @@ strong <- so2[, ini_date := group_eruptions(date, 60), by = volcano] |>
   _[, let(id = paste0(volcano, "_", ini_date))] |> 
   _[(so2_kt > 900 & p_alt_obs > 15 & vei >= 5) | stringr::str_detect(volcano, "Hunga_Tonga") & p_alt_obs > 15] |> 
   _[]
-
-map <- rnaturalearth::ne_coastline(scale = 50, returnclass = "sf")
 
 strong |> 
   ggplot(aes(lon, lat)) +
@@ -90,7 +90,8 @@ t2m_1y <- strong[, let(base = calculate_tbase(t2_mean, ini_date, period = 12)),
   strong[i = _, on = c("volcano", "ini_date")] |> 
   _[, let(id = paste0(volcano, "_", ini_date),
           lag =  as.numeric(difftime(time, ini_date)/86400),
-          diff = t2m_a - base)] |> 
+          diff = t2m_a - base,
+          run = "Global")] |> 
   _[]
 
 
@@ -109,7 +110,8 @@ t2m_1y |>
   guides(color = guide_legend(nrow = 2)) +
   # facet_wrap(~id) +
   scale_x_continuous(breaks = seq(0, 20, 2)) +
-  labs(x = "Months since eruption", y = "t2m anomaly",
+  labs(x = "Months since eruption", y = "Temperature anomaly (K)",
+       title = "Global",
        color = NULL) +
   theme_minimal() +
   theme(legend.position = "bottom", legend.box="vertical")
@@ -122,33 +124,36 @@ t2m_1y_tropics <- strong[, let(base = calculate_tbase(tropics_t2_mean, ini_date,
   strong[i = _, on = c("volcano", "ini_date")] |> 
   _[, let(id = paste0(volcano, "_", ini_date),
           lag =  as.numeric(difftime(time, ini_date)/86400),
-          diff = t2m_a - base)] |> 
+          diff = t2m_a - base, 
+          run = "Tropics")] |> 
   _[]
 
 
-t2m_1y_tropics |> 
-  _[, .(t_mean = mean(diff)), by = .(lag, id)] |> 
+t2m_1y_tropics|> 
+  _[, .(t_mean = mean(diff)), by = .(lag, id, run)] |> 
   _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
   _[lag %between% c(0, 365*1.5)] |> 
   ggplot(aes(lag/30, t_mean)) +
-  geom_hline(yintercept = 0, color =  "grey") +
   annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_hline(yintercept = 0, color =  "grey") +
   geom_line(aes(color = id), alpha = 0.5) +
   geom_line(data = t2m_1y_tropics[lag %between% c(-15, 365*1.5+15),
-                          .(t_mean = mean(diff)), by = lag] |>
+                          .(t_mean = mean(diff)), by = .(lag, run)] |>
               _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
   # geom_smooth() +
   guides(color = guide_legend(nrow = 2)) +
-  # facet_wrap(~id) +
+  # facet_wrap(~run) +
   scale_x_continuous(breaks = seq(0, 20, 2)) +
-  labs(x = "Months since eruption", y = "t2m anomaly",
+  scale_color_brewer(palette = "Dark2") +
+  coord_cartesian(expand = FALSE) +
+  labs(x = "Months since eruption", y = "Temperature anomaly (K)",
        color = NULL) +
   theme_minimal() +
   theme(legend.position = "bottom", legend.box="vertical")
 ```
 
 ```{r}
-field_base <- purrr::map(Sys.glob("data2/2t_base_1y.rds"), readr::read_rds) |> 
+field_base <- purrr::map(Sys.glob("data2/2t_base_composite_all.rds"), readr::read_rds) |> 
   rbindlist() |> 
   setnames("t2m", "t_base")
 
@@ -162,53 +167,75 @@ field_t2m |>
   #                          t_base = mean(t_base)), by = .(latitude, longitude)] |> 
   ggplot(aes(longitude, latitude)) +
   geom_contour_fill(aes(z = t2m - t_base, fill = after_stat(level)),
-                    breaks = seq(-0.05, 0.05, 0.005)) +
-  scale_fill_divergent_discretised(labels = function(x) JumpBy(x, 2, fill = ""),
+                    breaks = setdiff(seq(-4, 4, 0.25), 0)) +
+  scale_fill_divergent_discretised(mid = "white",
+                                   labels = function(x) JumpBy(x, 5, fill = ""),
                                    guide = guide_colorbar(barwidth = 25,
                                                           barheight = 0.5)) +
   geom_sf(data = map, inherit.aes = FALSE, 
           fill = NA, color = "grey", linewidth = 0.2) +
   # facet_wrap(~period, ncol = 1) +
   coord_sf(expand = FALSE, ylim = c(-60, 60)) +
-  labs(x = NULL, y = NULL, fill = NULL,
-       subtitle = "Anomaly of t2m using 4 month centered in month 6 after eruption") +
+  labs(x = NULL, y = NULL, fill = "T (K)") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
 
 
 ```{r}
-# field_base <- purrr::map(Sys.glob("data2/2t_base_4mcomposite_*"), readr::read_rds) |> 
-#   rbindlist() |> 
-#   setnames("t2m", "t_base")
-# 
-# field_t2m <- purrr::map(Sys.glob("data/2t_3mcomposite*")[1:5], function(f) {
-#   
-#   meta <- unglue(f, "data2/2t_{period}composite_{volcano}.rds")
-#   
-#   readr::read_rds(f) |> 
-#     _[, period := meta[[1]][["period"]]] 
-#   
-# }) |> rbindlist() |> 
-#   _[field_base, on = .NATURAL]
-# 
-# field_t2m |> 
-#   # _[, .(t2m = mean(t2m),
-#   #       t_base = mean(t_base)), by = .(latitude, longitude)] |> 
-#   ggplot(aes(longitude, latitude)) +
-#   geom_contour_fill(aes(z = t2m - t_base, fill = after_stat(level)),
-#                     breaks = seq(-0.4, 0.7, 0.05)) +
-#   scale_fill_divergent_discretised(labels = function(x) JumpBy(x, 2, fill = ""),
-#                                    guide = guide_colorbar(barwidth = 35,
-#                                                           barheight = 0.5)) +
-#   geom_sf(data = map, inherit.aes = FALSE, 
-#           fill = NA, color = "grey", linewidth = 0.2) +
-#   facet_wrap(~volcano, ncol = 3) +
-#   coord_sf(expand = FALSE, ylim = c(-60, 60)) +
-#   labs(x = NULL, y = NULL, fill = NULL,
-#        subtitle = "Anomaly of t2m using 4 months centered in month 4 after eruption") +
-#   theme_minimal() +
-#   theme(legend.position = "bottom")
+
+field_t2m |> 
+  # _[, .(t2m = mean(t2m),
+  #                          t_base = mean(t_base)), by = .(latitude, longitude)] |> 
+  ggplot(aes(longitude, latitude)) +
+  geom_contour_fill(aes(z = t2m - t_base, fill = after_stat(level)),
+                    breaks = setdiff(seq(-2, 2, 0.1), 0)) +
+  scale_fill_divergent_discretised(mid = "white",
+                                   labels = function(x) JumpBy(x, 3, fill = ""),
+                                   guide = guide_colorbar(barwidth = 25,
+                                                          barheight = 0.5)) +
+  geom_sf(data = map, inherit.aes = FALSE, 
+          fill = NA, color = "grey20", linewidth = 0.2) +
+  # facet_wrap(~period, ncol = 1) +
+  coord_sf(expand = FALSE, ylim = c(-20, 20), xlim = c(60, 160)) +
+  labs(x = NULL, y = NULL, fill = "T (K)") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+
+```{r}
+field_base <- purrr::map(Sys.glob("data2/2t_base_4mcomposite_*"), readr::read_rds) |>
+  rbindlist() |>
+  setnames("t2m", "t_base")
+
+field_t2m <- purrr::map(Sys.glob("data2/2t_a6m_4m_composite_*")[2:6], function(f) {
+
+  meta <- unglue(f, "data2/2t_{period}composite_{volcano}.rds")
+
+  readr::read_rds(f) |>
+    _[, period := meta[[1]][["period"]]]
+
+}) |> rbindlist() |>
+  _[field_base, on = .NATURAL]
+
+field_t2m |>
+  # _[, .(t2m = mean(t2m),
+  #       t_base = mean(t_base)), by = .(latitude, longitude)] |>
+  ggplot(aes(longitude, latitude)) +
+  geom_contour_fill(aes(z = t2m - t_base, fill = after_stat(level)),
+                    breaks = seq(-7, 7, 0.5)) +
+  scale_fill_divergent_discretised(labels = function(x) JumpBy(x, 2, fill = ""),
+                                   guide = guide_colorbar(barwidth = 30,
+                                                          barheight = 0.5)) +
+  geom_sf(data = map, inherit.aes = FALSE,
+          fill = NA, color = "grey", linewidth = 0.2) +
+  geom_point(data =  strong, aes(lon, lat)) +
+  facet_wrap(~volcano, ncol = 3) +
+  coord_sf(expand = FALSE, ylim = c(-60, 60)) +
+  labs(x = NULL, y = NULL, fill = "T (K)") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
 ```
 
 ### Extremes
@@ -287,7 +314,9 @@ npx_t2 |>
   guides(color = guide_legend(nrow = 2)) +
   # facet_wrap(~id) +
   scale_x_continuous(breaks = seq(0, 20, 2)) +
-  facet_wrap(~percentile) +
+  scale_y_continuous(labels = scales::unit_format(unit = "M", scale = 1e-6)) +
+  facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1th percentile",
+                                                         "p99" = "99th percentile"))) +
   labs(x = "Months since eruption", y = "Area (Km2)",
        color = NULL) +
   theme_minimal() +
@@ -416,7 +445,8 @@ tp_1y <- strong[, let(base = calculate_tbase_tp(tp_mean, ini_date, period = 12))
   strong[i = _, on = c("volcano", "ini_date")] |> 
   _[, let(id = paste0(volcano, "_", ini_date),
           lag =  as.numeric(difftime(time, ini_date)/86400),
-          diff = tp_a - base)] |> 
+          diff = tp_a - base,
+          run = "Global")] |> 
   _[]
 
 
@@ -449,26 +479,29 @@ tropics_tp_1y <- strong[, let(base = calculate_tbase_tp(tropics_tp_mean, ini_dat
   strong[i = _, on = c("volcano", "ini_date")] |> 
   _[, let(id = paste0(volcano, "_", ini_date),
           lag =  as.numeric(difftime(time, ini_date)/86400),
-          diff = tp_a - base)] |> 
+          diff = tp_a - base,
+          run = "Tropics")] |> 
   _[]
 
 
 tropics_tp_1y |> 
-  _[, .(t_mean = mean(diff)), by = .(lag, id)] |> 
+  _[, .(t_mean = mean(diff)), by = .(lag, id, run)] |> 
   _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
   _[lag %between% c(0, 365*1.5)] |> 
-  ggplot(aes(lag/30, t_mean)) +
+  ggplot(aes(lag/30, t_mean*1000)) +
   geom_hline(yintercept = 0, color =  "grey") +
   annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
   geom_line(aes(color = id), alpha = 0.5) +
-  geom_line(data = tropics_tp_1y[lag %between% c(-15, 365*1.5+15) & volcano != "Hunga_Tonga_Hungaapai", 
-                         .(t_mean = mean(diff)), by = lag] |> 
+  geom_line(data = tropics_tp_1y[lag %between% c(-15, 365*1.5+15), 
+                         .(t_mean = mean(diff*1000)), by = .(lag, run)] |> 
               _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
   # geom_smooth() +
   guides(color = guide_legend(nrow = 2)) +
-  # facet_wrap(~id) +
+  # facet_wrap(~run) +
   scale_x_continuous(breaks = seq(0, 18, 2)) +
-  labs(x = "Months since eruption", y = "tp anomaly",
+  scale_color_brewer(palette = "Dark2") +
+  coord_cartesian(expand = FALSE) +
+  labs(x = "Months since eruption", y = "Precipitation anomaly (mm/day)",
        color = NULL) +
   theme_minimal() +
   theme(legend.position = "bottom", legend.box="vertical")
@@ -476,7 +509,7 @@ tropics_tp_1y |>
 
 
 ```{r}
-field_base <- purrr::map(Sys.glob("data/tp_base_1y.rds"), readr::read_rds) |> 
+field_base <- purrr::map(Sys.glob("data2/tp_base_composite_all.rds"), readr::read_rds) |> 
   rbindlist() |> 
   setnames("tp", "t_base")
 
@@ -487,20 +520,69 @@ field_tp <- readr::read_rds("data2/tp_a6m_4m_composite_all.rds") |>
 
 field_tp |> 
   ggplot(aes(longitude, latitude)) +
-  geom_contour_fill(aes(z = tp - t_base, fill = after_stat(level)),
-                    breaks = seq(-0.0003, 0.0004, 0.00001)) +
-  scale_fill_divergent_discretised(labels = function(x) JumpBy(x, 10, fill = ""),
+  geom_contour_fill(aes(z = (tp - t_base)*1000, fill = after_stat(level)),
+                    breaks = seq(-13, 10, 1)) +
+  scale_fill_divergent_discretised(low = "#8c510a", high = "#1b7837", labels = function(x) JumpBy(x, 2, fill = ""),
                                    guide = guide_colorbar(barwidth = 25,
                                                           barheight = 0.5)) +
   geom_sf(data = map, inherit.aes = FALSE, 
           fill = NA, color = "grey", linewidth = 0.2) +
   # facet_wrap(~period, ncol = 1) +
   coord_sf(expand = FALSE, ylim = c(-60, 60)) +
-  labs(x = NULL, y = NULL, fill = NULL,
-       subtitle = "Anomaly of tp using 4 months centered in month 6 after eruption") +
+  labs(x = NULL, y = NULL, fill = "PP (mm/day)") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
+
+```{r}
+field_tp |> 
+  ggplot(aes(longitude, latitude)) +
+  geom_contour_fill(aes(z = (tp - t_base)*1000, fill = after_stat(level)),
+                    breaks = seq(-13, 10, 1)) +
+  scale_fill_divergent_discretised(low = "#8c510a", high = "#1b7837", labels = function(x) JumpBy(x, 2, fill = ""),
+                                   guide = guide_colorbar(barwidth = 25,
+                                                          barheight = 0.5)) +
+  geom_sf(data = map, inherit.aes = FALSE, 
+          fill = NA, color = "grey30", linewidth = 0.2) +
+  # facet_wrap(~period, ncol = 1) +
+  coord_sf(expand = FALSE, ylim = c(-20, 20), xlim = c(60, 160)) +
+  labs(x = NULL, y = NULL, fill = "PP (mm/day)") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+field_base <- purrr::map(Sys.glob("data2/tp_base_a*"), readr::read_rds) |>
+  rbindlist() |>
+  setnames("tp", "t_base")
+
+field_tp <- purrr::map(Sys.glob("data2/tp_a6m_2m_composite_*")[2:6], function(f) {
+
+  meta <- unglue(f, "data2/tp_{period}composite_{volcano}.rds")
+
+  readr::read_rds(f) |>
+    _[, period := meta[[1]][["period"]]]
+
+}) |> rbindlist() |>
+  _[field_base, on = .NATURAL]
+
+field_tp |> 
+  ggplot(aes(longitude, latitude)) +
+  geom_contour_fill(aes(z = (tp - t_base)*1000, fill = after_stat(level)),
+                    breaks = seq(-12, 13, 1)) +
+  scale_fill_divergent_discretised(low = "#8c510a", high = "#1b7837", labels = function(x) JumpBy(x, 2, fill = ""),
+                                   guide = guide_colorbar(barwidth = 25,
+                                                          barheight = 0.5)) +
+  geom_sf(data = map, inherit.aes = FALSE, 
+          fill = NA, color = "grey", linewidth = 0.2) +
+  geom_point(data =  strong, aes(lon, lat)) +
+  facet_wrap(~volcano, ncol = 3) +
+  coord_sf(expand = FALSE, ylim = c(-60, 60)) +
+  labs(x = NULL, y = NULL, fill = "PP (mm/day)") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
 
 ### Extremes
 
@@ -557,7 +639,9 @@ npx_tp |>
   guides(color = guide_legend(nrow = 2)) +
   # facet_wrap(~id) +
   scale_x_continuous(breaks = seq(0, 20, 2)) +
-  facet_wrap(~percentile) +
+    scale_y_continuous(labels = scales::unit_format(unit = "M", scale = 1e-6)) +
+  facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1th percentile",
+                                                         "p99" = "99th percentile"))) +
   labs(x = "Months since eruption", y = "Area (Km2)",
        color = NULL) +
   theme_minimal() +
@@ -616,9 +700,288 @@ npx_tp |>
   guides(color = guide_legend(nrow = 2)) +
   # facet_wrap(~id) +
   scale_x_continuous(breaks = seq(0, 20, 2)) +
-  facet_wrap(~percentile) +
+  scale_y_continuous(labels = scales::unit_format(unit = "M", scale = 1e-6)) +
+  facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1th percentile",
+                                                         "p99" = "99th percentile"))) +
   labs(x = "Months since eruption", y = "Area (Km2)",
        color = NULL) +
   theme_minimal() +
   theme(legend.position = "bottom", legend.box="vertical")
 ```
+
+## MSE
+
+```{r}
+calculate_base_mse <- function(temperature_serie, ini_date, period = 12) {
+
+    start_period <- lubridate::as_date(ini_date) - months(period)
+    
+   temperature_serie[time %between% c(start_period, ini_date), 
+                                        .(base = mean(value)), by = variable]
+  }
+
+get_series_mse <- function(mse_serie, ini_date, var, before = 1, after = 3) {
+# browser()
+  start_time <- ini_date - years(before)
+  end_time <- ini_date + years(after)
+
+  temp <- mse_serie[time %between% c(start_time, end_time) & variable == var] 
+
+
+  list(time = temp$time,
+       variable = temp$variable,
+       value = temp$value)
+
+}
+
+
+mse_serie <- readr::read_rds("data2/mse_mean_daily_regions.rds")$austrlia |> 
+  _[, let(time = as_date(time),
+          vdh_dx = -vdh_dx,
+          res = dh_dp + vdh_dx - fnet)] |> 
+  melt(id.vars = "time")
+
+base <- strong[, calculate_base_mse(mse_serie, ini_date, period = 12),
+                by = .(volcano, ini_date)]
+
+mse_anomalia <- strong[, calculate_base_mse(mse_serie, ini_date, period = 12),
+                by = .(volcano, ini_date)] |> 
+  _[, get_series_mse(mse_serie, ini_date, variable, before = 1, after = 2), by = .(volcano, ini_date, variable)] |>
+  base[i = _, on = c("volcano", "ini_date", "variable")] |>
+  # _[]
+  _[, let(id = paste0(volcano, "_", ini_date),
+          lag =  as.numeric(difftime(time, ini_date)/86400),
+          diff = value - base)] |>
+  _[]
+
+
+latex <- c("fnet" = "FNET", 
+           "rad" = "Rad", 
+           "slhf" = "Latent_heat", 
+           "sshf" = "Sensible_heat", 
+           "dh_dp" = latex2exp::TeX("$ \\omega \\partial h / \\partial p$"),
+           "vdh_dx" = latex2exp::TeX("$v\\nabla h$"),
+           "Res" = "Residual")
+mse_anomalia <- mse_anomalia |> 
+  # _[variable %in% c("dh_dp", "vdh_dx")] |> 
+  _[, variable2 := factor(variable)] 
+
+levels(mse_anomalia$variable2) <- latex
+
+mse_anomalia |> 
+  _[variable %in% c("fnet", "dh_dp", "vdh_dx")] |> 
+  _[, .(mean_diff = mean(diff)), by = .(lag, id, variable2)] |> 
+  _[, let(mean_diff = frollmean(mean_diff, 30, align = "center"))] |> 
+  _[lag %between% c(-10, 355*1)] |> 
+  _[] |> 
+  ggplot(aes(lag/30, mean_diff)) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_line(aes(color = id), alpha = 0.5) +
+  geom_line(data = mse_anomalia[lag %between% c(-100, 355*1) & variable %in% c("fnet", "dh_dp", "vdh_dx"),
+                         .(t_mean = mean(diff)), by = .(lag, variable2)] |>
+              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+              _[lag %between% c(0, 340*1)], aes(y = t_mean)) +
+  # geom_smooth() +
+  guides(color = guide_legend(nrow = 2)) +
+  facet_wrap(~variable2, scales = "free_y", ncol = 1, labeller = labeller(variable2 = label_parsed)) +
+  scale_x_continuous(breaks = seq(0, 12, 2)) +
+  scale_color_brewer(palette = "Dark2") +
+  coord_cartesian(expand = FALSE) +
+  labs(x = "Months since eruption", y = "(Wm-2)",
+       color = NULL) +
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.box="vertical")
+
+mse_anomalia |> 
+   _[variable %in% c("sshf", "slhf", "rad")] |> 
+  _[, .(mean_diff = mean(diff)), by = .(lag, id, variable2)] |> 
+  _[, let(mean_diff = frollmean(mean_diff, 30, align = "center"))] |> 
+  _[lag %between% c(-10, 355*1)] |> 
+  _[] |> 
+  ggplot(aes(lag/30, mean_diff)) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_line(aes(color = id), alpha = 0.5) +
+  geom_line(data = mse_anomalia[lag %between% c(-100, 355*1) & variable %in% c("sshf", "slhf", "rad"),
+                         .(t_mean = mean(diff)), by = .(lag, variable2)] |>
+              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+              _[lag %between% c(0, 340*1)], aes(y = t_mean)) +
+  # geom_smooth() +
+  guides(color = guide_legend(nrow = 2)) +
+  facet_wrap(~variable2, scales = "free_y", ncol = 1, labeller = labeller(variable2 = label_parsed)) +
+  scale_x_continuous(breaks = seq(0, 12, 2)) +
+  scale_color_brewer(palette = "Dark2") +
+  coord_cartesian(expand = FALSE) +
+  labs(x = "Months since eruption", y = "(Wm-2)",
+       color = NULL) +
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.box="vertical")
+```
+
+```{r}
+
+
+# 
+# mse_anomalia[volcano == "Pinatubo"] |> 
+#   ggplot(aes(lag, value)) +
+#   geom_line(aes(color = variable), alpha = 0.1) 
+#   geom_line(aes(y = base, color = variable))
+
+
+mse_anomalia[lag %between% c(-100, 380*1),
+                         .(mse_mean = mean(value)), by = .(lag, variable)] |>
+              _[, let(mse_mean = frollmean(mse_mean, 30, align = "center"))] |> 
+              _[lag %between% c(0, 360*1)] |>
+  _[, budget := fifelse(variable %in% c("fnet", "dh_dp", "vdh_dx", "res"), "budget", "secondary")] |> 
+  # _[]
+  ggplot(aes(lag/30, mse_mean)) +
+  annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_line(aes(color = variable, linetype = budget)) +
+  scale_color_manual(values = c("fnet" = "#a50f15", "rad" = "#de2d26", "slhf" = "#fb6a4a", "sshf" = "#fcae91", 
+                                "dh_dp" = "cyan4", "vdh_dx" = "steelblue",
+                              "res" = "grey40")) +
+   scale_x_continuous(breaks = seq(0, 12, 2)) +
+  scale_linetype(guide = NULL) +
+  labs(x = "Months since eruption", y = "Budget components (Wm-2)", color = NULL) +
+  theme_minimal()
+
+mse_anomalia[lag %between% c(-100, 380*1),
+                         .(mse_mean = mean(diff)), by = .(lag, variable)] |>
+              _[, let(mse_mean = frollmean(mse_mean, 30, align = "center"))] |> 
+              _[lag %between% c(0, 360*1)] |>
+  _[, budget := fifelse(variable %in% c("fnet", "dh_dp", "vdh_dx", "res"), "budget", "secondary")] |> 
+  _[variable != "res"] |> 
+  ggplot(aes(lag/30, mse_mean)) +
+  annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_hline(yintercept = 0, color = "grey20") +
+  geom_line(aes(color = variable, linetype = budget)) +
+  scale_color_manual(values = c("fnet" = "#a50f15", "rad" = "#de2d26", "slhf" = "#fb6a4a", "sshf" = "#fcae91", 
+                                "dh_dp" = "cyan4", "vdh_dx" = "steelblue",
+                              "res" = "grey40")) +
+   scale_x_continuous(breaks = seq(0, 12, 2)) +
+  scale_linetype(guide = NULL) +
+  labs(x = "Months since eruption", y = "Budget components (Wm-2)", color = NULL) +
+  theme_minimal()
+```
+
+
+
+```{r}
+field_base <- readr::read_rds("data2/mse_base_composite_all.rds") |> 
+  _[, vdh_dx := -vdh_dx] |> 
+  melt(id.vars = c("longitude", "latitude")) |> 
+  setnames("value", "base") 
+
+field_mse <- readr::read_rds("data2/mse_a6m_4m_composite_all.rds") |> 
+  _[, vdh_dx := -vdh_dx] |> 
+  melt(id.vars = c("longitude", "latitude")) |> 
+  _[field_base, on = .NATURAL]
+```
+
+
+```{r}
+field_mse |> 
+  _[variable %in% c("fnet", "rad", "slhf", "sshf")] |> 
+  ggplot(aes(longitude, latitude)) +
+  geom_contour_fill(aes(z = value - base, fill = after_stat(level)),
+                    breaks = seq(-60, 80, 5)) +
+  # scale_fill_viridis_d(guide = guide_colorsteps(barwidth = 25,
+  #                                                         barheight = 0.5)) +
+  scale_fill_divergent_discretised(labels = function(x) JumpBy(x, 5, fill = ""),
+                                   guide = guide_colorbar(barwidth = 25,
+                                                          barheight = 0.5)) +
+  geom_sf(data = map, inherit.aes = FALSE, 
+          fill = NA, color = "grey", linewidth = 0.2) +
+  facet_wrap(~variable, labeller = labeller(variable = c("fnet" = "FNET", "rad" = "RAD",
+                                                         "slhf" = "Latent heat", "sshf" = "Sensible heat"))) +
+  coord_sf(expand = FALSE, ylim = c(-60, 60)) +
+  labs(x = NULL, y = NULL, fill = "Wm-2") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+
+field_mse |> 
+  _[variable %in% c("fnet", "rad", "slhf", "sshf")] |> 
+  ggplot(aes(longitude, latitude)) +
+  geom_contour_fill(aes(z = value - base, fill = after_stat(level)),
+                    breaks = seq(-60, 80, 5)) +
+  # scale_fill_viridis_d(guide = guide_colorsteps(barwidth = 25,
+  #                                                         barheight = 0.5)) +
+  scale_fill_divergent_discretised(labels = function(x) JumpBy(x, 5, fill = ""),
+                                   guide = guide_colorbar(barwidth = 25,
+                                                          barheight = 0.5)) +
+  geom_sf(data = map, inherit.aes = FALSE, 
+          fill = NA, color = "grey30", linewidth = 0.2) +
+  facet_wrap(~variable, labeller = labeller(variable = c("fnet" = "FNET", "rad" = "RAD",
+                                                         "slhf" = "Latent heat", "sshf" = "Sensible heat"))) +
+  coord_sf(expand = FALSE, ylim = c(-20, 20), xlim = c(60, 160)) +
+  labs(x = NULL, y = NULL, fill = "Wm-2") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+
+
+```{r}
+labels <- c("dh_dp" = "omega delta p", "vdh_dx" = "v delta h delta x")
+latex <- c("dh_dp" = latex2exp::TeX("$ \\omega \\partial h / \\partial p$"),
+                                               "vdh_dx" = latex2exp::TeX("$v\\nabla h$"))
+data <- field_mse |> 
+  _[variable %in% c("dh_dp", "vdh_dx")] |> 
+  _[, variable2 := factor(variable)] 
+
+levels(data$variable2) <- latex
+
+data |>  
+  ggplot(aes(longitude, latitude)) +
+  geom_contour_fill(aes(z = value - base, fill = after_stat(level)),
+                    breaks = c(-Inf, seq(-90, 90, 10), Inf)) +
+  # scale_fill_viridis_d(guide = guide_colorsteps(barwidth = 25,
+  #                                                         barheight = 0.5)) +
+  scale_fill_divergent_discretised(labels = function(x) JumpBy(x, 2, fill = ""),
+                                   guide = guide_colorbar(barwidth = 25,
+                                                          barheight = 0.5)) +
+  geom_sf(data = map, inherit.aes = FALSE, 
+          fill = NA, color = "grey", linewidth = 0.2) +
+  facet_wrap(~variable2, labeller = labeller(variable2 = label_parsed)) +
+  coord_sf(expand = FALSE, ylim = c(-60, 60)) +
+  labs(x = NULL, y = NULL, fill = "Wm-2") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+
+data |>  
+  ggplot(aes(longitude, latitude)) +
+  geom_contour_fill(aes(z = value - base, fill = after_stat(level)),
+                    breaks = c(-Inf, seq(-90, 90, 10), Inf)) +
+  # scale_fill_viridis_d(guide = guide_colorsteps(barwidth = 25,
+  #                                                         barheight = 0.5)) +
+  scale_fill_divergent_discretised(labels = function(x) JumpBy(x, 2, fill = ""),
+                                   guide = guide_colorbar(barwidth = 25,
+                                                          barheight = 0.5)) +
+  geom_sf(data = map, inherit.aes = FALSE, 
+          fill = NA, color = "grey30", linewidth = 0.2) +
+  facet_wrap(~variable2, labeller = labeller(variable2 = label_parsed)) +
+  coord_sf(expand = FALSE, ylim = c(-20, 20), xlim = c(60, 160)) +
+  labs(x = NULL, y = NULL, fill = "Wm-2") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
