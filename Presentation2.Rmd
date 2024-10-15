@@ -16,6 +16,18 @@ library(unglue)
 source("scripts/help_functions.R")
 
 map <- rnaturalearth::ne_coastline(scale = 50, returnclass = "sf")
+
+theme_timeseries <- list(
+  scale_color_manual(values = c("#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "black")),
+  scale_linewidth_manual(values = c(0.5, 0.8)),
+  guides(color = guide_legend(nrow = 2), linewidth = "none"),
+  scale_x_continuous(breaks = seq(0, 20, 2)),
+  coord_cartesian(xlim = c(0, 15), expand = FALSE),
+  theme_minimal(),
+  theme(legend.position = "bottom", legend.box="vertical",
+        panel.grid.minor = element_line(color = "white"), aspect.ratio = 1/3,
+        panel.grid.major.y = element_line(color = "white"))
+)
 ```
 
 ## Strong volcanos
@@ -54,6 +66,22 @@ strong |>
   theme(legend.position = "bottom")
 ```
 
+
+```{r}
+so2 |> 
+  ggplot(aes(as_date(date), so2_kt)) +
+  geom_point(aes(color = factor(vei))) +
+  geom_point(data = strong, aes(x = as_date(ini_date)), shape = 21, fill = NA, size = 3) +
+  ggrepel::geom_label_repel(data = strong, aes(x = as_date(ini_date), label = volcano)) +
+  scale_color_viridis_d(option = "inferno", direction = -1) +
+  scale_y_log10(labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+  labs(x = "Date", y = "Measured SO2 mass in kilotons",
+       color = "Explosivity index") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+
 ## Effect on 2m temperature
 
 ### Anomalies
@@ -79,6 +107,11 @@ tropics_t2_mean <-  ReadNetCDF("data2/2t_daily_tropics_anomaly.nc", vars = "t2m"
   _[, time := as_date(time, tz = "UTC")] |> 
   setnames("t2m", "t2m_a")
 
+
+australia_t2_mean <-  ReadNetCDF("/g/data/w40/pc2687/ve/2t_daily_australia_anomaly.nc", vars = "t2m") |> 
+  _[, time := floor_date(time, "day")] |> 
+  _[, time := as_date(time, tz = "UTC")] |> 
+  setnames("t2m", "t2m_a")
 ```
 
 Base temperature defined as the average of the 12 months previous to the eruption
@@ -95,26 +128,23 @@ t2m_1y <- strong[, let(base = calculate_tbase(t2_mean, ini_date, period = 12)),
   _[]
 
 
-t2m_1y |> 
-  _[, .(t_mean = mean(diff)), by = .(lag, id)] |> 
-  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
-  _[lag %between% c(0, 365*1.5)] |> 
+rbind(t2m_1y|> 
+        _[, .(t_mean = mean(diff)), by = .(lag, id, run)] |> 
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+        _[lag %between% c(0, 365*1.5)],
+      t2m_1y[lag %between% c(-15, 365*1.5+15),
+             .(t_mean = mean(diff)), by = .(lag, run)] |>
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"),
+                id = "Mean")]) |> 
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
   ggplot(aes(lag/30, t_mean)) +
   geom_hline(yintercept = 0, color =  "grey") +
   annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
-  geom_line(aes(color = id), alpha = 0.5) +
-  geom_line(data = t2m_1y[lag %between% c(-15, 365*1.5+15),
-                          .(t_mean = mean(diff)), by = lag] |>
-              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
-  # geom_smooth() +
-  guides(color = guide_legend(nrow = 2)) +
-  # facet_wrap(~id) +
-  scale_x_continuous(breaks = seq(0, 20, 2)) +
-  coord_cartesian(xlim = c(0, 15), expand = FALSE) +
-  labs(x = "Months since eruption", y = "Temperature anomaly (K)",
+  geom_line(aes(color = id, linewidth = id == "Mean")) +
+  labs(x = "Months since eruption", y = "Temperature anomaly (C)",
        color = NULL) +
-  theme_minimal() +
-  theme(legend.position = "bottom", legend.box="vertical")
+  theme_timeseries
+
 ```
 
 ```{r}
@@ -129,27 +159,54 @@ t2m_1y_tropics <- strong[, let(base = calculate_tbase(tropics_t2_mean, ini_date,
   _[]
 
 
-t2m_1y_tropics|> 
-  _[, .(t_mean = mean(diff)), by = .(lag, id, run)] |> 
-  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
-  _[lag %between% c(0, 365*1.5)] |> 
+rbind(t2m_1y_tropics|> 
+        _[, .(t_mean = mean(diff)), by = .(lag, id, run)] |> 
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+        _[lag %between% c(0, 365*1.5)],
+      t2m_1y_tropics[lag %between% c(-15, 365*1.5+15),
+                     .(t_mean = mean(diff)), by = .(lag, run)] |>
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"),
+                id = "Mean")]) |> 
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
   ggplot(aes(lag/30, t_mean)) +
   annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
   geom_hline(yintercept = 0, color =  "grey") +
-  geom_line(aes(color = id), alpha = 0.5) +
-  geom_line(data = t2m_1y_tropics[lag %between% c(-15, 365*1.5+15),
-                                  .(t_mean = mean(diff)), by = .(lag, run)] |>
-              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
-  # geom_smooth() +
-  guides(color = guide_legend(nrow = 2)) +
-  # facet_wrap(~run) +
-  scale_x_continuous(breaks = seq(0, 20, 2)) +
-  scale_color_brewer(palette = "Dark2") +
-  coord_cartesian(expand = FALSE) +
-  labs(x = "Months since eruption", y = "Temperature anomaly (K)",
+  geom_line(aes(color = id, linewidth = id == "Mean")) +
+  labs(x = "Months since eruption", y = "Temperature anomaly (C)",
        color = NULL) +
-  theme_minimal() +
-  theme(legend.position = "bottom", legend.box="vertical")
+  theme_timeseries
+  
+```
+
+
+```{r}
+t2m_1y_australia <- strong[, let(base = calculate_tbase(australia_t2_mean, ini_date, period = 12)),
+                           by = .(volcano, ini_date)] |>
+  _[, get_series(australia_t2_mean, ini_date, before = 1, after = 2), by = .(volcano, ini_date)] |> 
+  strong[i = _, on = c("volcano", "ini_date")] |> 
+  _[, let(id = paste0(volcano, "_", ini_date),
+          lag =  as.numeric(difftime(time, ini_date)/86400),
+          diff = t2m_a - base, 
+          run = "Tropics")] |> 
+  _[]
+
+
+rbind(t2m_1y_australia|> 
+        _[, .(t_mean = mean(diff)), by = .(lag, id, run)] |> 
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+        _[lag %between% c(0, 365*1.5)],
+      t2m_1y_australia[lag %between% c(-15, 365*1.5+15),
+                       .(t_mean = mean(diff)), by = .(lag, run)] |>
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"),
+                id = "Mean")]) |> 
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
+  ggplot(aes(lag/30, t_mean)) +
+  annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  geom_line(aes(color = id, linewidth = id == "Mean")) +
+  labs(x = "Months since eruption", y = "Temperature anomaly (C)",
+       color = NULL) +
+  theme_timeseries
 ```
 
 ```{r}
@@ -178,7 +235,7 @@ field_t2m |>
           fill = NA, color = "grey20", linewidth = 0.2) +
   # facet_wrap(~period, ncol = 1) +
   coord_sf(expand = FALSE, ylim = c(-60, 60)) +
-  labs(x = NULL, y = NULL, fill = "T (K)") +
+  labs(x = NULL, y = NULL, fill = "T (C)") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
@@ -200,8 +257,8 @@ field_t2m |>
   geom_sf(data = map, inherit.aes = FALSE, 
           fill = NA, color = "grey20", linewidth = 0.2) +
   # facet_wrap(~period, ncol = 1) +
-  coord_sf(expand = FALSE, ylim = c(-20, 20), xlim = c(60, 160)) +
-  labs(x = NULL, y = NULL, fill = "T (K)") +
+  coord_sf(expand = FALSE, ylim = c(-25, 25), xlim = c(90, 170)) +
+  labs(x = NULL, y = NULL, fill = "T (C)") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
@@ -236,7 +293,7 @@ field_t2m |>
   geom_point(data =  strong, aes(lon, lat)) +
   facet_wrap(~volcano, ncol = 3) +
   coord_sf(expand = FALSE, ylim = c(-60, 60)) +
-  labs(x = NULL, y = NULL, fill = "T (K)") +
+  labs(x = NULL, y = NULL, fill = "T (C)") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
@@ -267,6 +324,11 @@ calculate_base_np <- function(temperature_px, ini_date, period = 12, p = "p95") 
 ```
 
 ```{r}
+
+area <- sum(ReadNetCDF("/g/data/w40/pc2687/ve/area.nc", subset = list(latitude = c(-30, 30)), out = "vector")$cell_area)
+area_aus <- sum(ReadNetCDF("/g/data/w40/pc2687/ve/area.nc", subset = list(latitude = c(-25, 25),
+                                                                          longitude = c(90, 170)), out = "vector")$cell_area)
+
 n_px <- purrr::map(Sys.glob("data2/2t_p*_area.nc"), function(f) {
   
   meta <- unglue::unglue(f, "data2/2t_{p}_area.nc")
@@ -300,32 +362,28 @@ npx_t2 <- purrr::map(percentiles, function(i) {
   
 }) |> 
   rbindlist() |> 
-  _[, diff := diff*10e-6] #km2
+  _[, diff := (diff)/area] #km2
 
-npx_t2 |> 
-  _[percentile %in% c("p1", "p99")] |> 
-  _[, .(t_mean = mean(diff)), by = .(lag, id, percentile)] |> 
-  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+rbind(npx_t2 |> 
+        _[percentile %in% c("p1", "p99")] |> 
+        _[, .(t_mean = mean(diff)), by = .(lag, id, percentile)] |> 
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"))],
+      npx_t2[lag %between% c(-15, 365*1.5+15),
+             .(t_mean = mean(diff)), by = .(lag, percentile)] |>
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"),
+                id = "Mean")])|> 
   _[lag %between% c(0, 365*1.5)] |> 
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
   ggplot(aes(lag/30, t_mean)) +
   geom_hline(yintercept = 0, color =  "grey") +
   annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
-  geom_line(aes(color = id), alpha = 0.5) +
-  geom_line(data = npx_t2[lag %between% c(-15, 365*1.5+15),
-                          .(t_mean = mean(diff)), by = .(lag, percentile)] |>
-              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
-  scale_color_brewer(palette = "Dark2") +
-  guides(color = guide_legend(nrow = 2)) +
-  # facet_wrap(~id) +
-  scale_x_continuous(breaks = seq(0, 20, 2)) +
-  scale_y_continuous(labels = scales::unit_format(unit = "M", scale = 1e-6)) +
-  coord_cartesian(xlim = c(0, 15), expand = FALSE) +
-  facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1th percentile",
+  geom_line(aes(color = id, linewidth = id == "Mean")) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1st percentile",
                                                              "p99" = "99th percentile"))) +
-  labs(x = "Months since eruption", y = "Area (Km2)",
+  labs(x = "Months since eruption", y = "Change in area",
        color = NULL) +
-  theme_minimal() +
-  theme(legend.position = "bottom", legend.box="vertical")
+  theme_timeseries
 ```
 
 ```{r}
@@ -363,46 +421,185 @@ npx_t2 <- purrr::map(percentiles, function(i) {
   
 }) |> 
   rbindlist() |> 
-  _[, diff := diff*10e-6] #km2
+  _[, diff := diff/area] #km2
 
-npx_t2 |> 
-  _[percentile %in% c("p1", "p99")] |> 
-  _[, .(t_mean = mean(diff)), by = .(lag, id, percentile)] |> 
-  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+rbind(npx_t2 |> 
+        _[percentile %in% c("p1", "p99")] |> 
+        _[, .(t_mean = mean(diff)), by = .(lag, id, percentile)] |> 
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"))],
+      npx_t2[lag %between% c(-15, 365*1.5+15),
+             .(t_mean = mean(diff)), by = .(lag, percentile)] |>
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"),
+                id = "Mean")])|> 
   _[lag %between% c(0, 365*1.5)] |> 
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
   ggplot(aes(lag/30, t_mean)) +
   geom_hline(yintercept = 0, color =  "grey") +
   annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
-  geom_line(aes(color = id), alpha = 0.5) +
-  geom_line(data = npx_t2[lag %between% c(-15, 365*1.5+15),
-                          .(t_mean = mean(diff)), by = .(lag, percentile)] |>
-              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
-  scale_color_brewer(palette = "Dark2") +
-  guides(color = guide_legend(nrow = 2)) +
-  # facet_wrap(~id) +
-  scale_x_continuous(breaks = seq(0, 20, 2)) +
-  coord_cartesian(xlim = c(0, 15), expand = FALSE) +
-  facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1th percentile",
+  geom_line(aes(color = id, linewidth = id == "Mean")) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1st percentile",
                                                              "p99" = "99th percentile"))) +
-  labs(x = "Months since eruption", y = "Area (Km2)",
+  labs(x = "Months since eruption", y = "Change in area",
        color = NULL) +
-  theme_minimal() +
-  theme(legend.position = "bottom", legend.box="vertical")
+  theme_timeseries
+```
+
+```{r}
+n_px <- purrr::map(Sys.glob("/g/data/w40/pc2687/ve/2t_p*_area_australia.nc"), function(f) {
+  
+  meta <- unglue::unglue(basename(f), "2t_{p}_area_australia.nc")
+  
+  ReadNetCDF(f, vars = "t2m") |> 
+    _[, percentile := meta[[1]][["p"]]] |> 
+    _[, time := as_date(floor_date(time, "day"))] |> 
+    _[, let(lat = NULL, lon = NULL)] |> 
+    setnames("t2m", "n_px")
+  
+}) |> rbindlist()
+
+percentiles <- c("p1", "p99")
+
+
+npx_t2 <- purrr::map(percentiles, function(i) {
+  
+  message(i)
+  
+  strong |>
+    _[, let(base = calculate_base_np(n_px, ini_date, p = i)),
+      by = .(volcano, ini_date)] |>
+    _[,  get_series_np(ini_date, after = 2, p = i),
+      by = .(volcano, ini_date)] |>
+    
+    strong[i = _, on = c("volcano", "ini_date")] |>
+    # _[]
+    _[, let(diff = n_px - base, 
+            id = paste0(volcano, "_", ini_date),
+            lag =  as.numeric(difftime(time, ini_date))/86400)] |> 
+    _[, percentile := i]
+  
+}) |> 
+  rbindlist() |> 
+  _[, diff := diff/area_aus] #km2
+
+rbind(npx_t2 |> 
+        _[percentile %in% c("p1", "p99")] |> 
+        _[, .(t_mean = mean(diff)), by = .(lag, id, percentile)] |> 
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"))],
+      npx_t2[lag %between% c(-15, 365*1.5+15),
+             .(t_mean = mean(diff)), by = .(lag, percentile)] |>
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"),
+                id = "Mean")])|> 
+  _[lag %between% c(0, 365*1.5)] |> 
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
+  ggplot(aes(lag/30, t_mean)) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_line(aes(color = id, linewidth = id == "Mean")) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1st percentile",
+                                                             "p99" = "99th percentile"))) +
+  labs(x = "Months since eruption", y = "Change in area",
+       color = NULL) +
+  theme_timeseries
+```
+
+```{r}
+rbind(npx_t2 |> 
+        _[percentile %in% c("p1", "p99")] |> 
+        _[, .(t_mean = mean(diff)), by = .(lag, id, percentile)] |> 
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"))],
+      npx_t2[lag %between% c(-15, 365*1.5+15),
+             .(t_mean = mean(diff)), by = .(lag, percentile)] |>
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"),
+                id = "Mean")])|> 
+  _[lag %between% c(0, 365*1.5)] |> 
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
+  ggplot(aes(lag/30, t_mean)) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_line(aes(color = id, linewidth = id == "Mean")) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1st percentile",
+                                                             "p99" = "99th percentile"))) +
+  labs(x = "Months since eruption", y = "Change in area",
+       color = NULL) +
+  theme_timeseries
+
+cut_round <- function(x, breaks) {
+
+  labels <- na.omit((breaks + data.table::shift(breaks, -1))/2)
+  cuts <- cut(x, breaks = breaks, labels = labels)
+
+  as.numeric(as.character(cuts))
+}
+
+rbind(
+npx_t2 |> 
+  _[, let(month = cut(lag, breaks = seq(-366, 365*2, 30), labels = FALSE)-12)] |> 
+  _[] |> 
+  _[, .(mean_diff = mean(diff)), by = .(month, id, percentile)],
+npx_t2 |> 
+  _[, let(month = cut(lag, breaks = seq(-366, 365*2, 30), labels = FALSE)-12)] |> 
+  _[] |> 
+  _[, .(mean_diff = mean(diff)), by = .(month, percentile)] |> 
+  _[, let(id = "Mean")]) |> 
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
+  ggplot(aes(month, mean_diff)) +
+   geom_hline(yintercept = 0, color =  "grey") +
+  annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_line(aes(color = id)) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1st percentile",
+                                                             "p99" = "99th percentile"))) +
+  labs(x = "Months since eruption", y = "Frecuency (%)",
+       color = NULL) +
+  theme_timeseries
 ```
 
 
 ```{r}
-GlanceNetCDF("/g/data/w40/pc2687/ve/2t_gt_p99.nc")
+base <- purrr::map(Sys.glob("data2/2t_p*_base_all.rds"), function(f) {
+  
+  meta <- unglue(f, "data2/2t_{p}_base_all.rds")
+  readr::read_rds(f) |> 
+  _[, percentile := meta[[1]][["p"]]]
 
-ReadNetCDF("/g/data/w40/pc2687/ve/2t_gt_p99.nc", vars = "t2m", subset = list(time = as_date("1990-01-01"))) |> 
-  _[] |> 
+}) |> 
+  rbindlist() |>
+  setnames("t2m", "base")
+
+
+t2_field <- purrr::map(Sys.glob("data2/2t_p*_a6m_4m_all.rds"), function(f) {
+  
+  meta <- unglue(f, "data2/2t_{p}_a6m_4m_all.rds")
+  readr::read_rds(f) |> 
+  _[, percentile := meta[[1]][["p"]]]
+
+}) |> 
+  rbindlist() |> 
+  _[base, on = .NATURAL] |> 
+  _[, let(diff = t2m/120 - base/365)]
+  
+
+t2_field |> 
+  
   ggplot(aes(longitude, latitude)) +
-  geom_point(aes(color =  t2m))
-
-
-readr::read_rds("data2/2t_p1_npx.rds")
+  geom_contour_fill(aes(z = diff*100, fill = after_stat(level)),
+                    breaks = seq(-0.6, 0.6, 0.1)*100) +
+    geom_sf(data = map, inherit.aes = FALSE, 
+          fill = NA, color = "grey20", linewidth = 0.2) +
+    scale_fill_divergent_discretised(mid = "white",
+                                   labels = function(x) JumpBy(x, 2, fill = ""),
+                                   guide = guide_colorbar(barwidth = 25,
+                                                          barheight = 0.5)) +
+  coord_sf(expand = FALSE, ylim = c(-25, 25), xlim = c(90, 170)) +
+  labs(x = NULL, y = NULL, fill = "Frecuency (%)") +
+  facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1st percentile",
+                                                             "p99" = "99th percentile"))) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
 ```
-
 
 
 ## Effect on total precipitation
@@ -460,6 +657,11 @@ tropics_tp_mean <-  ReadNetCDF("data2/tp_daily_tropics_anomaly.nc", vars = "tp")
   _[, time := as_date(time, tz = "UTC")] |> 
   setnames("tp", "tp_a")
 
+australia_tp_mean <-  ReadNetCDF("/g/data/w40/pc2687/ve/tp_daily_australia_anomaly.nc", vars = "tp") |> 
+  _[, time := floor_date(time, "day")] |> 
+  _[, time := as_date(time, tz = "UTC")] |> 
+  setnames("tp", "tp_a")
+
 tp_1y <- strong[, let(base = calculate_tbase_tp(tp_mean, ini_date, period = 12)),
                 by = .(volcano, ini_date)] |>
   _[, get_series_tp(tp_mean, ini_date, before = 1, after = 2), by = .(volcano, ini_date)] |> 
@@ -471,27 +673,22 @@ tp_1y <- strong[, let(base = calculate_tbase_tp(tp_mean, ini_date, period = 12))
   _[]
 
 
-tp_1y |> 
-  _[, .(t_mean = mean(diff)), by = .(lag, id)] |> 
-  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
-  _[lag %between% c(0, 365*1.5)] |> 
-  ggplot(aes(lag/30, t_mean)) +
-  geom_hline(yintercept = 0, color =  "grey") +
+rbind(tp_1y|> 
+        _[, .(t_mean = mean(diff)), by = .(lag, id, run)] |> 
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+        _[lag %between% c(0, 365*1.5+15)],
+      tp_1y[lag %between% c(-15, 365*1.5+15),
+            .(t_mean = mean(diff)), by = .(lag, run)] |>
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"),
+                id = "Mean")]) |> 
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
+  ggplot(aes(lag/30, t_mean*1000)) +
   annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
-  geom_line(aes(color = id), alpha = 0.5) +
-  geom_line(data = tp_1y[lag %between% c(-15, 365*1.5+15) & volcano != "Hunga_Tonga_Hungaapai", 
-                         .(t_mean = mean(diff)), by = lag] |> 
-              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
-  # geom_smooth() +
-  guides(color = guide_legend(nrow = 2)) +
-  # facet_wrap(~run) +
-  scale_x_continuous(breaks = seq(0, 18, 2)) +
-  scale_color_brewer(palette = "Dark2") +
-  coord_cartesian(xlim = c(0, 15), expand = FALSE) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  geom_line(aes(color = id)) +
   labs(x = "Months since eruption", y = "Precipitation anomaly (mm/day)",
        color = NULL) +
-  theme_minimal() +
-  theme(legend.position = "bottom", legend.box="vertical")
+  theme_timeseries
 ```
 
 
@@ -507,29 +704,54 @@ tropics_tp_1y <- strong[, let(base = calculate_tbase_tp(tropics_tp_mean, ini_dat
   _[]
 
 
-tropics_tp_1y |> 
-  _[, .(t_mean = mean(diff)), by = .(lag, id, run)] |> 
-  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
-  _[lag %between% c(0, 365*1.5)] |> 
+rbind(tropics_tp_1y|> 
+        _[, .(t_mean = mean(diff)), by = .(lag, id, run)] |> 
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+        _[lag %between% c(0, 365*1.5+15)],
+      tropics_tp_1y[lag %between% c(-15, 365*1.5+15),
+                    .(t_mean = mean(diff)), by = .(lag, run)] |>
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"),
+                id = "Mean")]) |> 
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
   ggplot(aes(lag/30, t_mean*1000)) +
-  geom_hline(yintercept = 0, color =  "grey") +
   annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
-  geom_line(aes(color = id), alpha = 0.5) +
-  geom_line(data = tropics_tp_1y[lag %between% c(-15, 365*1.5+15), 
-                                 .(t_mean = mean(diff*1000)), by = .(lag, run)] |> 
-              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
-  # geom_smooth() +
-  guides(color = guide_legend(nrow = 2)) +
-  # facet_wrap(~run) +
-  scale_x_continuous(breaks = seq(0, 18, 2)) +
-  scale_color_brewer(palette = "Dark2") +
-  coord_cartesian(xlim = c(0, 15), expand = FALSE) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  geom_line(aes(color = id)) +
   labs(x = "Months since eruption", y = "Precipitation anomaly (mm/day)",
        color = NULL) +
-  theme_minimal() +
-  theme(legend.position = "bottom", legend.box="vertical")
+  theme_timeseries
 ```
 
+
+```{r}
+australia_tp_1y <- strong[, let(base = calculate_tbase_tp(australia_tp_mean, ini_date, period = 12)),
+                          by = .(volcano, ini_date)] |>
+  _[, get_series_tp(australia_tp_mean, ini_date, before = 1, after = 2), by = .(volcano, ini_date)] |> 
+  strong[i = _, on = c("volcano", "ini_date")] |> 
+  _[, let(id = paste0(volcano, "_", ini_date),
+          lag =  as.numeric(difftime(time, ini_date)/86400),
+          diff = tp_a - base,
+          run = "Tropics")] |> 
+  _[]
+
+
+rbind(australia_tp_1y|> 
+        _[, .(t_mean = mean(diff)), by = .(lag, id, run)] |> 
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+        _[lag %between% c(0, 365*1.5)],
+      australia_tp_1y[lag %between% c(-15, 365*1.5+15),
+                      .(t_mean = mean(diff)), by = .(lag, run)] |>
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"),
+                id = "Mean")]) |> 
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
+  ggplot(aes(lag/30, t_mean*1000)) +
+  annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  geom_line(aes(color = id)) +
+  labs(x = "Months since eruption", y = "Precipitation anomaly (mm/day)",
+       color = NULL) +
+  theme_timeseries
+```
 
 ```{r}
 field_base <- purrr::map(Sys.glob("data2/tp_base_composite_all.rds"), readr::read_rds) |> 
@@ -568,7 +790,7 @@ field_tp |>
   geom_sf(data = map, inherit.aes = FALSE, 
           fill = NA, color = "grey20", linewidth = 0.2) +
   # facet_wrap(~period, ncol = 1) +
-  coord_sf(expand = FALSE, ylim = c(-20, 20), xlim = c(60, 160)) +
+  coord_sf(expand = FALSE, ylim = c(-25, 25), xlim = c(90, 170)) +
   labs(x = NULL, y = NULL, fill = "PP (mm/day)") +
   theme_minimal() +
   theme(legend.position = "bottom")
@@ -642,7 +864,7 @@ npx_tp <- purrr::map(percentiles, function(i) {
   
 }) |> 
   rbindlist() |> 
-  _[, diff := diff*10e-6] #km2
+  _[, diff := diff/area] #km2
 
 npx_tp |> 
   _[percentile %in% c("p1", "p99")] |> 
@@ -652,22 +874,16 @@ npx_tp |>
   ggplot(aes(lag/30, t_mean)) +
   geom_hline(yintercept = 0, color =  "grey") +
   annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
-  geom_line(aes(color = id), alpha = 0.5) +
+  geom_line(aes(color = id, linewidth = id == "Mean")) +
   geom_line(data = npx_tp[lag %between% c(-15, 365*1.5+15),
                           .(t_mean = mean(diff)), by = .(lag, percentile)] |>
               _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
-  scale_color_brewer(palette = "Dark2") +
-  guides(color = guide_legend(nrow = 2)) +
-  # facet_wrap(~id) +
-  scale_x_continuous(breaks = seq(0, 20, 2)) +
-  scale_y_continuous(labels = scales::unit_format(unit = "M", scale = 1e-6)) +
-  coord_cartesian(xlim = c(0, 15), expand = FALSE) +
+  scale_y_continuous(labels = scales::percent_format()) +
   facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1th percentile",
                                                              "p99" = "99th percentile"))) +
   labs(x = "Months since eruption", y = "Area (Km2)",
        color = NULL) +
-  theme_minimal() +
-  theme(legend.position = "bottom", legend.box="vertical")
+  theme_timeseries
 ```
 
 ```{r}
@@ -704,7 +920,7 @@ npx_tp <- purrr::map(percentiles, function(i) {
   
 }) |> 
   rbindlist() |> 
-  _[, diff := diff*10e-6] #km2
+  _[, diff := diff/area] #km2
 
 npx_tp |> 
   _[percentile %in% c("p1", "p99")] |> 
@@ -714,23 +930,140 @@ npx_tp |>
   ggplot(aes(lag/30, t_mean)) +
   geom_hline(yintercept = 0, color =  "grey") +
   annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
-  geom_line(aes(color = id), alpha = 0.5) +
+  geom_line(aes(color = id, linewidth = id == "Mean")) +
   geom_line(data = npx_tp[lag %between% c(-15, 365*1.5+15),
                           .(t_mean = mean(diff)), by = .(lag, percentile)] |>
               _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
-  scale_color_brewer(palette = "Dark2") +
-  guides(color = guide_legend(nrow = 2)) +
-  # facet_wrap(~id) +
-  scale_x_continuous(breaks = seq(0, 20, 2)) +
-  scale_y_continuous(labels = scales::unit_format(unit = "M", scale = 1e-6)) +
-  coord_cartesian(xlim = c(0, 15), expand = FALSE) +
+  scale_y_continuous(labels = scales::percent_format()) +
   facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1th percentile",
                                                              "p99" = "99th percentile"))) +
-  labs(x = "Months since eruption", y = "Area (Km2)",
+  labs(x = "Months since eruption", y = "Change in area (Km2)",
        color = NULL) +
-  theme_minimal() +
-  theme(legend.position = "bottom", legend.box="vertical")
+  theme_timeseries
 ```
+
+```{r}
+n_px <- purrr::map(Sys.glob("/g/data/w40/pc2687/ve//tp_p*_area_australia.nc"), function(f) {
+  
+  meta <- unglue::unglue(basename(f), "tp_{p}_area_australia.nc")
+  
+  ReadNetCDF(f, vars = "tp") |> 
+    _[, percentile := meta[[1]][["p"]]] |> 
+    _[, time := as_date(floor_date(time, "day"))] |> 
+    _[, let(lat = NULL, lon = NULL)] |> 
+    setnames("tp", "n_px")
+  
+}) |> rbindlist()
+
+percentiles <- c("p1", "p99")
+
+npx_tp <- purrr::map(percentiles, function(i) {
+  
+  message(i)
+  
+  strong |>
+    _[, let(base = calculate_base_np(n_px, ini_date, p = i)),
+      by = .(volcano, ini_date)] |>
+    _[,  get_series_np(ini_date, after = 2, p = i),
+      by = .(volcano, ini_date)] |>
+    
+    strong[i = _, on = c("volcano", "ini_date")] |>
+    # _[]
+    _[, let(diff = n_px - base, 
+            id = paste0(volcano, "_", ini_date),
+            lag =  as.numeric(difftime(time, ini_date))/86400)] |> 
+    _[, percentile := i]
+  
+}) |> 
+  rbindlist() |> 
+  _[, diff := diff/area_aus] #km2
+
+npx_tp |> 
+  _[percentile %in% c("p1", "p99")] |> 
+  _[, .(t_mean = mean(diff)), by = .(lag, id, percentile)] |> 
+  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+  _[lag %between% c(0, 365*1.5)] |> 
+  ggplot(aes(lag/30, t_mean)) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_line(aes(color = id, linewidth = id == "Mean")) +
+  geom_line(data = npx_tp[lag %between% c(-15, 365*1.5+15),
+                          .(t_mean = mean(diff)), by = .(lag, percentile)] |>
+              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1th percentile",
+                                                             "p99" = "99th percentile"))) +
+  labs(x = "Months since eruption", y = "Change in area (Km2)",
+       color = NULL) +
+  theme_timeseries
+
+rbind(
+npx_tp |> 
+  _[, let(month = cut(lag, breaks = seq(-366, 365*2, 30), labels = FALSE)-12)] |> 
+  _[] |> 
+  _[, .(mean_diff = mean(diff)), by = .(month, id, percentile)],
+npx_tp |> 
+  _[, let(month = cut(lag, breaks = seq(-366, 365*2, 30), labels = FALSE)-12)] |> 
+  _[] |> 
+  _[, .(mean_diff = mean(diff)), by = .(month, percentile)] |> 
+  _[, let(id = "Mean")]) |> 
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
+  ggplot(aes(month, mean_diff)) +
+   geom_hline(yintercept = 0, color =  "grey") +
+  annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
+  geom_line(aes(color = id)) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1st percentile",
+                                                             "p99" = "99th percentile"))) +
+  labs(x = "Months since eruption", y = "Frecuency (%)",
+       color = NULL) +
+  theme_timeseries
+
+```
+
+```{r}
+base <- purrr::map(Sys.glob("data2/tp_p*_base_all.rds"), function(f) {
+  
+  meta <- unglue(f, "data2/tp_{p}_base_all.rds")
+  readr::read_rds(f) |> 
+  _[, percentile := meta[[1]][["p"]]]
+
+}) |> 
+  rbindlist() |>
+  setnames("tp", "base")
+
+
+tp_field <- purrr::map(Sys.glob("data2/tp_p*_a6m_4m_all.rds"), function(f) {
+  
+  meta <- unglue(f, "data2/tp_{p}_a6m_4m_all.rds")
+  readr::read_rds(f) |> 
+  _[, percentile := meta[[1]][["p"]]]
+
+}) |> 
+  rbindlist() |> 
+  _[base, on = .NATURAL] |> 
+  _[, let(diff = tp/120 - base/365)]
+  
+
+tp_field |> 
+  
+  ggplot(aes(longitude, latitude)) +
+  geom_contour_fill(aes(z = diff*100, fill = after_stat(level)),
+                    breaks = seq(-0.2, 0.2, 0.025)*100) +
+    geom_sf(data = map, inherit.aes = FALSE, 
+          fill = NA, color = "grey20", linewidth = 0.2) +
+    scale_fill_divergent_discretised(mid = "white",
+                                   labels = function(x) JumpBy(x, 2, fill = ""),
+                                   guide = guide_colorbar(barwidth = 25,
+                                                          barheight = 0.5)) +
+  coord_sf(expand = FALSE, ylim = c(-25, 25), xlim = c(90, 170)) +
+  labs(x = NULL, y = NULL, fill = "Frequency (%)") +
+  facet_wrap(~percentile, labeller = labeller(percentile = c("p1" = "1st percentile",
+                                                             "p99" = "99th percentile"))) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
 
 ## MSE
 
@@ -761,7 +1094,7 @@ rad_serie <- readr::read_rds("data2/rad_mean_daily_regions.rds")$austrlia |>
   _[, let(time = as_date(time))] |> 
   # setnames(old = c("ssr", "tsr"), new = c("sw", "lw")) |> 
   melt(id.vars = "time") 
-  
+
 
 mse_serie <- readr::read_rds("data2/mse_mean_daily_regions_wg.rds")$austrlia |> 
   _[, let(time = as_date(time),
@@ -802,61 +1135,55 @@ levels(mse_anomalia$variable2) <- latex
 
 
 ```{r}
+
+rbind(
 mse_anomalia |> 
   _[variable %in% c("fnet", "dh_dp", "vdh_dx")] |> 
   _[, .(mean_diff = mean(diff)), by = .(lag, id, variable2)] |> 
-  _[, let(mean_diff = frollmean(mean_diff, 30, align = "center"))] |> 
+  _[, let(mean_diff = frollmean(mean_diff, 30, align = "center"))],
+  mse_anomalia[lag %between% c(-30, 365*1.4) & variable %in% c("fnet", "dh_dp", "vdh_dx"),
+                                .(mean_diff = mean(diff)), by = .(lag, variable2)] |>
+              _[, let(mean_diff = frollmean(mean_diff, 30, align = "center"),
+                      id = "Mean")]) |> 
   _[lag %between% c(-10, 365*1.4)] |> 
- 
+  _[, let(variable2 = forcats::fct_relevel(variable2, "FNET", after = Inf))] |> 
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
   ggplot(aes(lag/30, mean_diff)) +
   geom_hline(yintercept = 0, color =  "grey") +
   annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
-  geom_line(aes(color = id), alpha = 0.5) +
-  geom_line(data = mse_anomalia[lag %between% c(-30, 365*1.4) & variable %in% c("fnet", "dh_dp", "vdh_dx"),
-                                .(t_mean = mean(diff)), by = .(lag, variable2)] |>
-              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
-              _[lag %between% c(-10, 365*1.4)], aes(y = t_mean)) +
-  # geom_smooth() +
-  guides(color = guide_legend(nrow = 2)) +
-  facet_wrap(~variable2, ncol = 1, labeller = labeller(variable2 = label_parsed)) +
-  scale_x_continuous(breaks = seq(0, 15, 2)) +
-  scale_color_brewer(palette = "Dark2") +
-  coord_cartesian(expand = FALSE, xlim = c(0, 15)) +
+  geom_line(aes(color = id, linewidth = id == "Mean")) +
+  facet_wrap(~variable2, ncol = 1, labeller = labeller(variable2 = label_parsed),
+             strip.position = "right") +
   labs(x = "Months since eruption", y = "(Wm-2)",
        color = NULL) +
-  theme_minimal() +
-  theme(legend.position = "bottom", legend.box="vertical")
+  theme_timeseries
 ```
 
 
 ```{r}
+rbind(
 mse_anomalia |> 
   _[variable %in% c("sshf", "slhf", "rad", "sw", "lw")] |> 
   _[, .(mean_diff = mean(diff)), by = .(lag, id, variable2)] |> 
-  _[, let(mean_diff = frollmean(mean_diff, 30, align = "center"))] |> 
+  _[, let(mean_diff = frollmean(mean_diff, 30, align = "center"))],
+  mse_anomalia[lag %between% c(-30, 365*1.4) & variable %in% c("sshf", "slhf", "rad", "sw", "lw"),
+                                .(mean_diff = mean(diff)), by = .(lag, variable2)] |>
+              _[, let(mean_diff = frollmean(mean_diff, 30, align = "center"),
+                      id = "Mean")]
+) |> 
   _[lag %between% c(-10, 365*1.4)] |> 
-   # _[, let(variable2 = forcats::fct_relevel(variable2, c("Rad", "SW", "LW", "Latent_heat", "Sensible_heat")))] |>
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
   ggplot(aes(lag/30, mean_diff)) +
   geom_hline(yintercept = 0, color =  "grey") +
   annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
-  geom_line(aes(color = id), alpha = 0.5) +
-  geom_line(data = mse_anomalia[lag %between% c(-30, 365*1.4) & variable %in% c("sshf", "slhf", "rad", "sw", "lw"),
-                                .(t_mean = mean(diff)), by = .(lag, variable2)] |>
-              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
-              _[lag %between% c(-10, 365*1.4)], aes(y = t_mean)) +
-  # geom_smooth() +
-  guides(color = guide_legend(nrow = 2)) +
+  geom_line(aes(color = id, linewidth = id == "Mean")) +
   facet_wrap(~factor(variable2, c("Rad", "SW", "LW", "Latent_heat", "Sensible_heat")), 
              ncol = 2, 
              dir = "v",
              labeller = labeller(variable2 = label_parsed)) +
-  scale_x_continuous(breaks = seq(0, 12, 2)) +
-  scale_color_brewer(palette = "Dark2") +
-  coord_cartesian(expand = FALSE, xlim = c(0, 15)) +
   labs(x = "Months since eruption", y = "(Wm-2)",
        color = NULL) +
-  theme_minimal() +
-  theme(legend.position = "bottom", legend.box="vertical")
+  theme_timeseries
 ```
 
 ```{r}
@@ -865,7 +1192,7 @@ mse_anomalia |>
   _[, .(mean_diff = mean(diff)), by = .(lag, id, variable2)] |> 
   _[, let(mean_diff = frollmean(mean_diff, 30, align = "center"))] |> 
   _[lag %between% c(-10, 365*1.4)] |> 
-   # _[, let(variable2 = forcats::fct_relevel(variable2, c("Rad", "SW", "LW", "Latent_heat", "Sensible_heat")))] |>
+  # _[, let(variable2 = forcats::fct_relevel(variable2, c("Rad", "SW", "LW", "Latent_heat", "Sensible_heat")))] |>
   ggplot(aes(lag/30, mean_diff)) +
   geom_hline(yintercept = 0, color =  "grey") +
   annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
@@ -915,7 +1242,10 @@ mse_anomalia[lag %between% c(-100, 380*1),
   scale_x_continuous(breaks = seq(0, 12, 2)) +
   scale_linetype(guide = NULL) +
   labs(x = "Months since eruption", y = "Budget components (Wm-2)", color = NULL) +
-  theme_minimal()
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.box="vertical",
+        panel.grid.minor = element_line(color = "white"), aspect.ratio = 1/3,
+        panel.grid.major.y = element_line(color = "white"))
 
 mse_anomalia[lag %between% c(-100, 380*1),
              .(mse_mean = mean(diff)), by = .(lag, variable)] |>
@@ -933,8 +1263,11 @@ mse_anomalia[lag %between% c(-100, 380*1),
   scale_x_continuous(breaks = seq(0, 12, 2)) +
   scale_linetype(guide = NULL) +
   labs(x = "Months since eruption", y = "Budget components (Wm-2)", color = NULL) +
-  theme_minimal()
-```
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.box="vertical",
+        panel.grid.minor = element_line(color = "white"), aspect.ratio = 1/3,
+        panel.grid.major.y = element_line(color = "white"))
+  ```
 
 ```{r}
 mse_anomalia |> 
@@ -1005,7 +1338,7 @@ tropics_w_mean <- readr::read_rds("data2/w_mean_daily_regions.rds")$tropics |>
   _[, time := as_date(time, tz = "UTC")] |> 
   setnames("w", "w_a")
 
-tp_1y <- strong[, let(base = calculate_tbase_w(w_mean, ini_date, period = 12)),
+w_1y <- strong[, let(base = calculate_tbase_w(w_mean, ini_date, period = 12)),
                 by = .(volcano, ini_date)] |>
   _[, get_series_w(w_mean, ini_date, before = 1, after = 2), by = .(volcano, ini_date)] |> 
   strong[i = _, on = c("volcano", "ini_date")] |> 
@@ -1016,34 +1349,30 @@ tp_1y <- strong[, let(base = calculate_tbase_w(w_mean, ini_date, period = 12)),
   _[]
 
 
-tp_1y |> 
-  _[, .(t_mean = mean(diff)), by = .(lag, id)] |> 
-  _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
-  _[lag %between% c(0, 365*1.5)] |> 
+rbind(w_1y|> 
+        _[, .(t_mean = mean(diff)), by = .(lag, id, run)] |> 
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"))] |> 
+        _[lag %between% c(0, 365*1.5+15)],
+      w_1y[lag %between% c(-15, 365*1.5+15),
+            .(t_mean = mean(diff)), by = .(lag, run)] |>
+        _[, let(t_mean = frollmean(t_mean, 30, align = "center"),
+                id = "Mean")]) |> 
+  _[, let(id = forcats::fct_relevel(id, "Mean", after = Inf))] |> 
   ggplot(aes(lag/30, t_mean)) +
-  geom_hline(yintercept = 0, color =  "grey") +
   annotate("rect", xmin = 4, xmax = 8, ymin = -Inf, ymax = Inf, alpha = .1) +
-  geom_line(aes(color = id), alpha = 0.5) +
-  geom_line(data = tp_1y[lag %between% c(-15, 365*1.5+15) & volcano != "Hunga_Tonga_Hungaapai", 
-                         .(t_mean = mean(diff)), by = lag] |> 
-              _[, let(t_mean = frollmean(t_mean, 30, align = "center"))], aes(y = t_mean)) +
-  # geom_smooth() +
-  guides(color = guide_legend(nrow = 2)) +
-  # facet_wrap(~run) +
-  scale_x_continuous(breaks = seq(0, 18, 2)) +
-  scale_color_brewer(palette = "Dark2") +
-  coord_cartesian(xlim = c(0, 15), expand = FALSE) +
+  geom_hline(yintercept = 0, color =  "grey") +
+  geom_line(aes(color = id)) +
   labs(x = "Months since eruption", y = "Omega (Pas-1)",
        color = NULL) +
-  theme_minimal() +
-  theme(legend.position = "bottom", legend.box="vertical")
+  theme_timeseries
+
 ```
 
 
 
 ```{r}
 
-readr::read_rds("data2/rad_base_composite_all.rds")
+
 
 field_base <- rbind(
   readr::read_rds("data2/w_base_composite_all.rds") |> 
@@ -1058,8 +1387,8 @@ field_base <- rbind(
     setnames("value", "base"),
   
   readr::read_rds("data2/rad_base_composite_all.rds") |> 
-    melt(id.vars = c("longitude", "latitude")) |> 
-    setnames("value", "base")
+   melt(id.vars = c("longitude", "latitude")) |> 
+    setnames("value", "base") 
   )
 
 field_mse <-  rbind(
@@ -1073,7 +1402,8 @@ field_mse <-  rbind(
     _[, vdh_dx := -vdh_dx] |> 
     melt(id.vars = c("longitude", "latitude")),
   
-    readr::read_rds("data2/rad_a6m_4m_composite_all.rds") |> 
+   readr::read_rds("data2/rad_a6m_4m_composite_all.rds") |> 
+    # _[, vdh_dx := -vdh_dx] |> 
     melt(id.vars = c("longitude", "latitude"))
   )
 
@@ -1085,8 +1415,26 @@ field_mse <- field_mse |>
 
 ```{r}
 field_mse |> 
-  _[variable %in% c("rad","sw", "lw", "slhf", "sshf")] |> 
-  _[, let(variable = factor(variable, levels = c("rad","sw", "lw", "slhf", "sshf")))] |> 
+  _[variable %in% c("rad", "sw", "lw", "slhf", "sshf")] |> 
+  ggplot(aes(longitude, latitude)) +
+  geom_contour_fill(aes(z = value - base, fill = after_stat(level))) +
+  # scale_fill_viridis_d(guide = guide_colorsteps(barwidth = 25,
+  #                                                         barheight = 0.5)) +
+  scale_fill_divergent_discretised(labels = function(x) JumpBy(x, 5, fill = ""),
+                                   guide = guide_colorbar(barwidth = 25,
+                                                          barheight = 0.5)) +
+  geom_sf(data = map, inherit.aes = FALSE, 
+          fill = NA, color = "grey", linewidth = 0.2) +
+  facet_wrap(~variable, labeller = labeller(variable = c("rad" = "RAD", "sw" = "SW", "lw" = "LW",
+                                                         "slhf" = "Latent heat", "sshf" = "Sensible heat"))) +
+  coord_sf(expand = FALSE, ylim = c(-60, 60)) +
+  labs(x = NULL, y = NULL, fill = "Wm-2") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+
+field_mse |> 
+  _[variable %in% c("rad", "sw", "lw", "slhf", "sshf")] |> 
   ggplot(aes(longitude, latitude)) +
   geom_contour_fill(aes(z = value - base, fill = after_stat(level)),
                     breaks = seq(-60, 80, 5)) +
@@ -1099,18 +1447,18 @@ field_mse |>
           fill = NA, color = "grey30", linewidth = 0.2) +
   facet_wrap(~variable, labeller = labeller(variable = c("rad" = "RAD", "sw" = "SW", "lw" = "LW",
                                                          "slhf" = "Latent heat", "sshf" = "Sensible heat"))) +
-  coord_sf(expand = FALSE, ylim = c(-60, 60)) +
+  coord_sf(expand = FALSE, ylim = c(-25, 25), xlim = c(90, 170)) +
   labs(x = NULL, y = NULL, fill = "Wm-2") +
   theme_minimal() +
   theme(legend.position = "bottom")
 
 
 field_mse |> 
-  _[variable %in% c("rad","sw", "lw", "slhf", "sshf")] |> 
-  _[, let(variable = factor(variable, levels = c("rad","sw", "lw", "slhf", "sshf")))] |> 
+  # _[variable %in% c("rad", "sw", "lw", "slhf", "sshf")] |> 
+  _[variable %in% c("sw", "lw")] |> 
   ggplot(aes(longitude, latitude)) +
-  geom_contour_fill(aes(z = value - base, fill = after_stat(level)),
-                    breaks = seq(-60, 80, 5)) +
+  geom_point(aes(color = value - base)) +
+  # geom_contour_fill(aes(z = value - base, fill = after_stat(level))) +
   # scale_fill_viridis_d(guide = guide_colorsteps(barwidth = 25,
   #                                                         barheight = 0.5)) +
   scale_fill_divergent_discretised(labels = function(x) JumpBy(x, 5, fill = ""),
@@ -1141,8 +1489,7 @@ field_mse |>
           fill = NA, color = "grey20", linewidth = 0.2) +
   # facet_wrap(~variable, labeller = labeller(variable = c("fnet" = "FNET", "rad" = "RAD",
   #                                                        "slhf" = "Latent heat", "sshf" = "Sensible heat"))) +
-  # coord_sf(expand = FALSE, ylim = c(-20, 20), xlim = c(60, 160)) +
-  coord_sf(expand = FALSE, ylim = c(-60, 60)) +
+  coord_sf(expand = FALSE, ylim = c(-25, 25), xlim = c(90, 170)) +
   labs(x = NULL, y = NULL, fill = "Pas-1") +
   theme_minimal() +
   theme(legend.position = "bottom")
@@ -1158,12 +1505,11 @@ latex <- c("fnet" = "FNET",
 
 data <- field_mse |> 
   _[variable %in% c("fnet", "dh_dp", "vdh_dx")] |> 
-  _[, variable2 := factor(variable, levels = c("dh_dp", "vdh_dx", "fnet"))] 
+  _[, variable2 := factor(variable)] 
 
 levels(data$variable2) <- latex
 
 data |>  
-  _[, let(variable2 = forcats::fct_relevel(variable2, "FNET", after = Inf))] |> 
   ggplot(aes(longitude, latitude)) +
   geom_contour_fill(aes(z = value - base, fill = after_stat(level)),
                     breaks = c(-Inf, seq(-90, 90, 10), Inf)) +
@@ -1193,7 +1539,7 @@ data |>
   geom_sf(data = map, inherit.aes = FALSE, 
           fill = NA, color = "grey30", linewidth = 0.2) +
   facet_wrap(~variable2, labeller = labeller(variable2 = label_parsed)) +
-  coord_sf(expand = FALSE, ylim = c(-20, 20), xlim = c(60, 160)) +
+  coord_sf(expand = FALSE, ylim = c(-25, 25), xlim = c(90, 170)) +
   labs(x = NULL, y = NULL, fill = "Wm-2") +
   theme_minimal() +
   theme(legend.position = "bottom")
