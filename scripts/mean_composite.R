@@ -60,5 +60,5 @@ if (period == "base") {
   
   field[, let(value = value/nrow(times))] |> 
     setnames("value", var2) |> 
-    readr::write_rds(x = _, paste0("~/ve-project/data_noenso/derived/", var, "a", center_day/30, "m_", half_window*2/30, "m_composite_all.rds"))
+    readr::write_rds(x = _, paste0("~/ve-project/data_noenso/derived/", var, "_a", center_day/30, "m_", half_window*2/30, "m_composite_all.rds"))
 }
