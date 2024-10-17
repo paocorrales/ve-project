@@ -99,7 +99,7 @@ future::plan(future::multisession, workers = 4)
 
 message("daily data")
 
-var <- "2t"
+var <- "tp"
 level <- "sfc"
 
 temp_path <- "/scratch/w40/pc2687/daily_means/"
@@ -170,7 +170,7 @@ purrr::map(1:12, function(m) {
   
   message(m)
   
-  infile <- "/g/data/w40/pc2687/ve/2t_daily_deseasoned.nc"
+  infile <- paste0("/g/data/w40/pc2687/ve/", var, "_daily_deseasoned.nc")
   
   outfile <-  paste0(temp_path, var, "/", var, "_", formatC(m, width = 2, flag = "0"), ".nc")
   dir.create(dirname(outfile), showWarnings = FALSE, recursive = TRUE)
@@ -178,9 +178,11 @@ purrr::map(1:12, function(m) {
   if (file.exists(outfile)) {
     return(outfile)
   }
+  list_years <- paste0(c(1979:2023), collapse = ",")
   
   infile |> 
     cdo_selmonth(months = m) |> 
+    cdo_selyear(years = list_years) |> 
     cdo_execute(output = outfile, options = "-L -b F64")
 })
 
@@ -193,31 +195,25 @@ purrr::map(1:12, function(m) {
   
   message(m)
   
+  outfile_a <- here::here(paste0("data_noenso/a/", var, "_mei_a_", formatC(m, width = 2, flag = "0"), ".nc"))
+  
+  if (file.exists(outfile_a)) {
+    return(outfile_a)
+  }
+  
   infile_enso <- here::here(paste0("data_noenso/MEI/mei_", formatC(m, width = 2, flag = "0"), "_enlarged.nc"))
   infile_var <- paste0(temp_path, var, "/", var, "_", formatC(m, width = 2, flag = "0"), ".nc")
   infile_enso_var <- here::here(paste0("data_noenso/MEI/mei_", formatC(m, width = 2, flag = "0"), "_var.nc"))
   
-  outfile <- here::here(paste0("data_noenso/MEI/mei_", formatC(m, width = 2, flag = "0"), "_covar_", var, ".nc"))
-  
-  if (file.exists(outfile)) {
-    return(outfile)
-  }
+  outfile_covar <- here::here(paste0("data_noenso/covar/", var, "_", formatC(m, width = 2, flag = "0"), "_covar_mei.nc"))
   
   infile_enso |> 
     cdo_timcovar(infile_var) |> 
-    cdo_execute(output = outfile, options = "-L")
+    cdo_execute(output = outfile_covar, options = "-L")
   
-  infile_covar <- outfile
-  
-  outfile <- here::here(paste0("data_noenso/", var, "_mei_a_", formatC(m, width = 2, flag = "0"), ".nc"))
-  
-  if (file.exists(outfile)) {
-    return(outfile)
-  }
-  
-  infile_covar |> 
+  outfile_covar |> 
     cdo_div(infile_enso_var) |> 
-    cdo_execute(output = outfile, options = "-L")
+    cdo_execute(output = outfile_a, options = "-L")
   
 })
 
@@ -230,28 +226,28 @@ purrr::map(1:12, function(m) {
   
   message(m)
   
+  outfile_b <- here::here(paste0("data_noenso/b/", var, "_mei_b_", formatC(m, width = 2, flag = "0"), ".nc"))
+  
+  if (file.exists(outfile_b)) {
+    return(outfile_b)
+  }
+  
   infile_var <- paste0(temp_path, var, "/", var, "_", formatC(m, width = 2, flag = "0"), ".nc")
   
-  outfile <- here::here(paste0("data_noenso/", var, "_", formatC(m, width = 2, flag = "0"), "_mean.nc"))
+  outfile_var_mean <- here::here(paste0("data_noenso/mean/", var, "_", formatC(m, width = 2, flag = "0"), "_mean.nc"))
   
   infile_var |> 
     cdo_timmean() |> 
-    cdo_execute(output = outfile, options = "-L")
+    cdo_execute(output = outfile_var_mean, options = "-L")
   
   infile_enso_mean <- here::here(paste0("data_noenso/MEI/mei_", formatC(m, width = 2, flag = "0"), "_mean.nc"))
-  infile_a <- here::here(paste0("data_noenso/", var, "_mei_a_", formatC(m, width = 2, flag = "0"), ".nc"))
-  infile_var_mean <- here::here(paste0("data_noenso/", var, "_", formatC(m, width = 2, flag = "0"), "_mean.nc"))
+  infile_a <- here::here(paste0("data_noenso/a/", var, "_mei_a_", formatC(m, width = 2, flag = "0"), ".nc"))
+  infile_var_mean <- outfile_var_mean
   
-  outfile <- here::here(paste0("data_noenso/", var, "_mei_b_", formatC(m, width = 2, flag = "0"), ".nc"))
-  
-  if (file.exists(outfile)) {
-    return(outfile)
-  }
-  
-  infile_a |> 
-    cdo_mul(infile_enso_mean) |> 
+  infile_enso_mean |> 
+    cdo_mul(infile_a) |> 
     cdo_sub(ifile1 = infile_var_mean) |> 
-    cdo_execute(output = outfile, options = "-L")
+    cdo_execute(output = outfile_b, options = "-L")
   
 })
 
@@ -271,8 +267,8 @@ purrr::map(1:12, function(m) {
   }
   
   infile_var <- paste0(temp_path, var, "/", var, "_", formatC(m, width = 2, flag = "0"), ".nc")
-  infile_a <- here::here(paste0("data_noenso/", var, "_mei_a_", formatC(m, width = 2, flag = "0"), ".nc"))
-  infile_b <- here::here(paste0("data_noenso/", var, "_mei_b_", formatC(m, width = 2, flag = "0"), ".nc"))
+  infile_a <- here::here(paste0("data_noenso/a/", var, "_mei_a_", formatC(m, width = 2, flag = "0"), ".nc"))
+  infile_b <- here::here(paste0("data_noenso/b/", var, "_mei_b_", formatC(m, width = 2, flag = "0"), ".nc"))
   infile_enso <- here::here(paste0("data_noenso/MEI/mei_", formatC(m, width = 2, flag = "0"), "_enlarged.nc"))
   
   enso_effect <- cdo_mul(infile_a, infile_enso) |>
